@@ -1,0 +1,55 @@
+<resources>
+    <string name="app_name">AntFluidMarkdown</string>
+    <string name="printer">Printer</string>
+    <string name="start">开始</string>
+    <string name="appendText">追加文字</string>
+    <string name="stop">停止</string>
+    <string name="delete">×</string>
+    <string name="append">append:</string>
+    <string name="demo">Demo</string>
+    <string name="input_markdown_text">输入markdown原文</string>
+    <string name="resume">继续</string>
+    <string name="pause">暂停</string>
+    <string name="toPrinter"><![CDATA[ <br/><iconlink link="open://printer" src="local://mipmap/link" style="color:#1296DB;font-size:26px">流式打印Demo</iconlink>\n\n ]]></string>
+    <string name="toList"><![CDATA[ <iconlink link="open://list_printer" src="local://mipmap/link" style="color:#1296DB;font-size:26px">流式打印列表demo</iconlink>\n\n ]]></string>
+
+    <string name="sample"><![CDATA[# 一级标题\n我是正文我是正文我是正文我是正文我是正文我是正文我是正文我是正文我是正文我是正文我是正文我是正文我是正文我是正文我是正文我是正文我是正文我是正文我是正文我是正文\n\n## 二级标题\n### 三级标题\n#### 四级标题\n##### 五级标题\n###### 六级标题\n**加粗文本**\n*斜体文本*  \n***加粗斜体文本***  \n~~删除线文本~~  \n\n---\n\n### 列表\n- 无序列表项1\n- 无序列表项2\n\t- 子列表项1\n\t- 子列表项2\n1. 有序列表项1\n2. 有序列表项2\n\t1. 子列表项1\n\t2. 子列表项2\n\t3. 子列表项3\n\n---\n\n### 引用\n> 引用内容\n> 多行引用内容\n> 引用中**加粗文本**\n> Dorothy followed her through many of the beautiful rooms in her castle.\n>> The Witch bade her clean the pots and kettles and sweep the floor and keep the fire fed with wood.\n\n---\n\n### 链接与图片\n[这是一个链接](https://www.example.com)  \n\n![图片描述1](https://gw.alipayobjects.com/zos/bmw-prod/4c49eb9a-88c1-4bd2-afa3-d3054331e983/kvgaht9k_w849_h375.png) \n\n![图片描述2](https://gw.alipayobjects.com/zos/bmw-prod/79ea98f0-303b-4816-ba27-5638a04ca353/kvgahl7g_w849_h375.png)\n\n---\n\n### 表格\n| 表头1 | 表头2 | 表头3 |\n|-------|-------|-------|\n| 内容1 | 内容2 | 内容3 |\n| 内容4 | 内容5 | 内容6 |\n\n---\n\n### 代码\n行内代码：`inline code`\n\n```python\n# 代码块\ndef hello_world():\n    print(\"Hello, World!\")\n```\n\n---\n\n### 分隔线\n\n---\n\n### 脚注\n这是一个脚注示例[^1][^2].\n。\n\n---\n\n### 内嵌HTML\n<a href=\"https://www.example.com\" style=\"color: blue;text-decoration: underline;\"> 我是一个a标签。</a><u>我是下划线</u>]]></string>
+
+    <string name="sample_heading"><![CDATA[# 一级标题\n我是正文我是正文我是正文我是正文我是正文我是正文我是正文我是正文我是正文我是正文\n\n## 二级标题\n### 三级标题\n#### 四级标题\n##### 五级标题\n###### 六级标题]]></string>
+
+    <string name="sample_text_style"><![CDATA[### 文本样式\n这是普通文本。\n\n**这是加粗文本**\n\n*这是斜体文本*\n\n***这是加粗斜体文本***\n\n~~这是删除线文本~~\n\n<u>这是下划线文本</u>]]></string>
+
+    <string name="sample_list"><![CDATA[### 无序列表\n- 无序列表项1\n- 无序列表项2\n\t- 子列表项1\n\t- 子列表项2\n\t\t- 子子列表项1\n\n### 有序列表\n1. 有序列表项1\n2. 有序列表项2\n\t1. 子列表项1\n\t2. 子列表项2\n\t3. 子列表项3\n\n### 任务列表\n- [x] 已完成任务\n- [ ] 未完成任务\n- [ ] 另一个任务]]></string>
+
+    <string name="sample_blockquote"><![CDATA[### 引用块\n> 这是引用内容\n> 多行引用内容\n> 引用中**加粗文本**\n> Dorothy followed her through many of the beautiful rooms in her castle.\n>> The Witch bade her clean the pots and kettles and sweep the floor and keep the fire fed with wood.]]></string>
+
+    <string name="sample_table"><![CDATA[### 简单表格\n| 表头1 | 表头2 | 表头3 |\n|-------|-------|-------|\n| 内容1 | 内容2 | 内容3 |\n| 内容4 | 内容5 | 内容6 |\n\n### 对齐表格\n| 左对齐 | 居中对齐 | 右对齐 |\n|:------|:------:|------:|\n| L1 | C1 | R1 |\n| L2 | C2 | R2 |\n| L3 | C3 | R3 |\n\n### 多列表格\n| 姓名 | 年龄 | 城市 | 职业 | 评分 |\n|------|-----|------|-----|-------|\n| Alice | 28 | 纽约 | 工程师 | 95 |\n| Bob | 32 | 伦敦 | 设计师 | 88 |\n| Charlie | 25 | 东京 | 经理 | 92 |]]></string>
+
+    <string name="sample_code"><![CDATA[### 行内代码\n这是 `inline code` 行内代码示例。\n\n### Python\n```python\n# 代码块\ndef hello_world():\n    print(\"Hello, World!\")\n\nfor i in range(10):\n    hello_world()\n```\n\n### Java\n```java\npublic class Main {\n    public static void main(String[] args) {\n        System.out.println(\"Hello World\");\n    }\n}\n```\n\n### JSON\n```json\n{\n  \"name\": \"AntFluid\",\n  \"version\": \"1.0.0\",\n  \"description\": \"Markdown 渲染器\"\n}\n```]]></string>
+
+    <string name="sample_link_image"><![CDATA[### 链接\n[这是一个链接](https://www.example.com)\n\n[Google](https://www.google.com)\n\n### 图片\n![图片描述1](https://gw.alipayobjects.com/zos/bmw-prod/4c49eb9a-88c1-4bd2-afa3-d3054331e983/kvgaht9k_w849_h375.png)\n\n![图片描述2](https://gw.alipayobjects.com/zos/bmw-prod/79ea98f0-303b-4816-ba27-5638a04ca353/kvgahl7g_w849_h375.png)]]></string>
+
+    <string name="sample_footnote"><![CDATA[### 脚注\n这是一个脚注示例[^1][^2]。\n\n另一个脚注引用[^3]。]]></string>
+
+    <string name="sample_html"><![CDATA[### HTML 标签\n<a href=\"https://www.example.com\" style=\"color: blue;text-decoration: underline;\"> 我是一个a标签。</a>\n\n<u>我是下划线</u>\n\n<s>这是HTML删除线</s>\n\n<sup>上标文本</sup> 和 <sub>下标文本</sub>]]></string>
+
+    <string name="sample_hr"><![CDATA[### 分隔线\n分隔线上方的内容\n\n---\n\n分隔线之间的内容\n\n***\n\n分隔线下方的内容]]></string>
+
+    <string name="stopped">（已终止）</string>
+    <string name="list">多markdown列表</string>
+    <string name="add">添加数据</string>
+
+    <string name="tag_all">全部</string>
+    <string name="tag_heading">标题</string>
+    <string name="tag_text_style">文本样式</string>
+    <string name="tag_list">列表</string>
+    <string name="tag_blockquote">引用</string>
+    <string name="tag_table">表格</string>
+    <string name="tag_code">代码</string>
+    <string name="tag_link_image">链接和图片</string>
+    <string name="tag_footnote">脚注</string>
+    <string name="tag_html">HTML</string>
+    <string name="tag_hr">分隔线</string>
+    <string name="tag_printer">流式打印</string>
+
+</resources>

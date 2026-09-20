@@ -1,0 +1,55 @@
+<resources>
+    <string name="app_name">AntFluidMarkdown</string>
+    <string name="printer">Printer</string>
+    <string name="start">start</string>
+    <string name="appendText">append text</string>
+    <string name="stop">stop</string>
+    <string name="delete">×</string>
+    <string name="append">append:</string>
+    <string name="demo">Demo</string>
+    <string name="input_markdown_text">input markdown text</string>
+    <string name="resume">resume</string>
+    <string name="pause">pause</string>
+    <string name="toPrinter"><![CDATA[ <br/><iconlink link="open://printer" src="local://mipmap/link" style="color:#1296DB;font-size:26px">Stream print demo</iconlink>\n\n ]]></string>
+    <string name="toList"><![CDATA[ <iconlink link="open://list_printer" src="local://mipmap/link" style="color:#1296DB;font-size:26px">List stream print demo</iconlink>\n\n ]]></string>
+
+    <string name="sample"><![CDATA[# h1 Heading\nThis is normal text. This is normal text. This is normal text. This is normal text. This is normal text. This is normal text. This is normal text. This is normal text. \n\n## h2 Heading\n### h3 Heading\n#### h4 Heading\n##### h5 Heading\n###### h6 Heading\n**This is bold text**\n*This is italic text*  \n***This is bold and italic text***  \n~~Strikethrough~~  \n\n---\n\n### Lists\n- Unordered 1 level:0\n- Unordered 2 level:0\n\t- Unordered 1 level:1\n\t- Unordered 2 level:1\n1. Ordered 1 level:0\n2. Ordered 2 level:0\n\t1. Ordered 1 level:1\n\t2. Ordered 2 level:1\n    3. Ordered 2 level:1\n\n---\n\n### Blockquotes\n> This is blockquotes\n> Blockquotes can also be nested…\n> **bold tex in blockquotes**\n> Dorothy followed her through many of the beautiful rooms in her castle.\n>> The Witch bade her clean the pots and kettles and sweep the floor and keep the fire fed with wood.\n\n---\n\n### Links & Images\n[link text](https://www.example.com)  \n\n![image description1](https://gw.alipayobjects.com/zos/bmw-prod/4c49eb9a-88c1-4bd2-afa3-d3054331e983/kvgaht9k_w849_h375.png) \n\n![image description2](https://gw.alipayobjects.com/zos/bmw-prod/79ea98f0-303b-4816-ba27-5638a04ca353/kvgahl7g_w849_h375.png)\n\n---\n\n### Table\n| header1 | header2 | header3 |\n|-------|-------|-------|\n| content1 | content2 | content3 |\n| content4 | content5 | content6 |\n\n---\n\n### Code\n`inline code`\n\n```python\n# Code block\ndef hello_world():\n    print("Hello, World!")\n```\n\n---\n\n### Horizontal Rules\n\n---\n\n### Footnotes\nthis is a footnote[^1][^2].\n。\n\n---\n\n### HTML\n<a href=\"https://www.example.com\" style=\"color: blue;text-decoration: underline;\"> This is a tag. </a><u>this is underline</u>\n]]></string>
+
+    <string name="sample_heading"><![CDATA[# h1 Heading\nThis is normal text. This is normal text. This is normal text. This is normal text. This is normal text.\n\n## h2 Heading\n### h3 Heading\n#### h4 Heading\n##### h5 Heading\n###### h6 Heading]]></string>
+
+    <string name="sample_text_style"><![CDATA[### Text Styles\nThis is normal text.\n\n**This is bold text**\n\n*This is italic text*\n\n***This is bold and italic text***\n\n~~Strikethrough~~\n\n<u>This is underline text</u>]]></string>
+
+    <string name="sample_list"><![CDATA[### Unordered List\n- Unordered 1 level:0\n- Unordered 2 level:0\n\t- Unordered 1 level:1\n\t- Unordered 2 level:1\n\t\t- Unordered 1 level:2\n\n### Ordered List\n1. Ordered 1 level:0\n2. Ordered 2 level:0\n\t1. Ordered 1 level:1\n\t2. Ordered 2 level:1\n\t3. Ordered 3 level:1\n\n### Task List\n- [x] Task completed\n- [ ] Task not completed\n- [ ] Another task]]></string>
+
+    <string name="sample_blockquote"><![CDATA[### Blockquotes\n> This is blockquotes\n> Blockquotes can also be nested…\n> **bold text in blockquotes**\n> Dorothy followed her through many of the beautiful rooms in her castle.\n>> The Witch bade her clean the pots and kettles and sweep the floor and keep the fire fed with wood.]]></string>
+
+    <string name="sample_table"><![CDATA[### Simple Table\n| header1 | header2 | header3 |\n|-------|-------|-------|\n| content1 | content2 | content3 |\n| content4 | content5 | content6 |\n\n### Alignment Table\n| Left | Center | Right |\n|:------|:------:|------:|\n| L1 | C1 | R1 |\n| L2 | C2 | R2 |\n| L3 | C3 | R3 |\n\n### Large Table\n| Name | Age | City | Job | Score |\n|------|-----|------|-----|-------|\n| Alice | 28 | New York | Engineer | 95 |\n| Bob | 32 | London | Designer | 88 |\n| Charlie | 25 | Tokyo | Manager | 92 |]]></string>
+
+    <string name="sample_code"><![CDATA[### Inline Code\nThis is `inline code` in text.\n\n### Python\n```python\n# Code block\ndef hello_world():\n    print(\"Hello, World!\")\n\nfor i in range(10):\n    hello_world()\n```\n\n### Java\n```java\npublic class Main {\n    public static void main(String[] args) {\n        System.out.println(\"Hello World\");\n    }\n}\n```\n\n### JSON\n```json\n{\n  \"name\": \"AntFluid\",\n  \"version\": \"1.0.0\",\n  \"description\": \"Markdown renderer\"\n}\n```]]></string>
+
+    <string name="sample_link_image"><![CDATA[### Links\n[link text](https://www.example.com)\n\n[Google](https://www.google.com)\n\n### Images\n![image description1](https://gw.alipayobjects.com/zos/bmw-prod/4c49eb9a-88c1-4bd2-afa3-d3054331e983/kvgaht9k_w849_h375.png)\n\n![image description2](https://gw.alipayobjects.com/zos/bmw-prod/79ea98f0-303b-4816-ba27-5638a04ca353/kvgahl7g_w849_h375.png)]]></string>
+
+    <string name="sample_footnote"><![CDATA[### Footnotes\nThis is a footnote example[^1][^2].\n\nAnother footnote reference[^3].]]></string>
+
+    <string name="sample_html"><![CDATA[### HTML Tags\n<a href=\"https://www.example.com\" style=\"color: blue;text-decoration: underline;\"> This is an a tag. </a>\n\n<u>This is underline</u>\n\n<s>This is strikethrough via HTML</s>\n\n<sup>superscript</sup> and <sub>subscript</sub>]]></string>
+
+    <string name="sample_hr"><![CDATA[### Horizontal Rules\nContent above the line\n\n---\n\nContent between lines\n\n***\n\nContent below the line]]></string>
+
+    <string name="stopped">(stopped)</string>
+    <string name="list">List</string>
+    <string name="add">add item</string>
+
+    <string name="tag_all">All</string>
+    <string name="tag_heading">Heading</string>
+    <string name="tag_text_style">Text Style</string>
+    <string name="tag_list">List</string>
+    <string name="tag_blockquote">Blockquote</string>
+    <string name="tag_table">Table</string>
+    <string name="tag_code">Code</string>
+    <string name="tag_link_image">Link &amp; Image</string>
+    <string name="tag_footnote">Footnote</string>
+    <string name="tag_html">HTML</string>
+    <string name="tag_hr">Horizontal Rule</string>
+    <string name="tag_printer">Printer</string>
+
+</resources>
