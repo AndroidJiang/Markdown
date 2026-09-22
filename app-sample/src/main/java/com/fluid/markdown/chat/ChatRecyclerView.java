@@ -1,9 +1,11 @@
 package com.fluid.markdown.chat;
 
+import android.animation.ValueAnimator;
 import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.AttributeSet;
+import android.view.animation.DecelerateInterpolator;
 import android.view.View;
 
 import androidx.annotation.NonNull;
@@ -14,23 +16,24 @@ import androidx.recyclerview.widget.RecyclerView;
  * 自动滚动 RecyclerView（参考千问 HybridFeedRecyclerView）。
  * <p>
  * 核心机制（千问方案）：
- * 1. 流式渲染时用 scrollToPosition 直接定位（非动画），不用 smoothScrollToPosition
- *    —— smoothScroll 是动画滚动，流式高频触发会互相打断造成抖动
- * 2. 高度去抖：computeVerticalScrollRange 没变化时不滚
- * 3. post 合并防抖：短时间多次请求合并为一次
- * 4. 滚动状态机：AUTO_SCROLL / MANUAL_SCROLL / MANUAL_SCROLL_PAUSED / NO_SCROLL
- * 5. 用户手动上滑时暂停自动滚动，回到底部后恢复
- * 6. 卡片出现时暂停滚动，布局完成后恢复
+ * 1. PrinterMarkDownTextView 流式打印时高度每帧都在变，
+ *    onSizeChanged 回调直接触发 requestScrollToBottom，
+ *    持续不断地跟滚，视觉上就是一直在平滑滚动
+ * 2. 每次高度变化用 ValueAnimator + scrollBy 做 ~200ms 减速动画，
+ *    新请求取消旧动画、从当前位移继续，动画重叠 = 连续平滑
+ * 3. 高度去抖：computeVerticalScrollRange 没变化时不滚
+ * 4. post 合并防抖：16ms 内多次请求合并为一次
+ * 5. 滚动状态机：AUTO_SCROLL / MANUAL_SCROLL / MANUAL_SCROLL_PAUSED / NO_SCROLL
  */
 public class ChatRecyclerView extends RecyclerView {
-
-    private static final String TAG = "ChatRecyclerView";
 
     private ChatScrollState autoScrollState = ChatScrollState.AUTO_SCROLL;
     private int lastRange = 0;
     private boolean isScrollPending = false;
     private final Handler scrollHandler = new Handler(Looper.getMainLooper());
     private final Runnable scrollRunnable = this::doScrollToBottom;
+    private ValueAnimator scrollAnimator;
+    private int currentScrollDelta = 0;
 
     private final OnScrollListener autoScrollListener = new OnScrollListener() {
         @Override
@@ -76,9 +79,6 @@ public class ChatRecyclerView extends RecyclerView {
         return autoScrollState;
     }
 
-    /**
-     * 判断当前是否滚动到了底部。
-     */
     public boolean isAtBottom() {
         LinearLayoutManager lm = (LinearLayoutManager) getLayoutManager();
         if (lm == null || getAdapter() == null || getAdapter().getItemCount() == 0) {
@@ -92,9 +92,7 @@ public class ChatRecyclerView extends RecyclerView {
     /**
      * 请求滚动到底部（流式渲染时调用）。
      * <p>
-     * 关键：用 scrollToPosition（直接定位）而非 smoothScrollToPosition（动画）。
-     * 流式渲染时高度每帧都在变，动画滚动会被反复打断导致抖动。
-     * 直接定位配合高度去抖 + post 合并，效果等同千问的 scrollToPositionWithOffset。
+     * 每帧高度变化都会调用此方法，形成持续跟滚效果。
      */
     public void requestScrollToBottom() {
         if (autoScrollState != ChatScrollState.AUTO_SCROLL) return;
@@ -105,50 +103,100 @@ public class ChatRecyclerView extends RecyclerView {
         if (range == lastRange) return;
         lastRange = range;
 
-        // post 合并防抖
+        // 合并防抖：16ms 内多次请求合并为一次
         if (isScrollPending) return;
         isScrollPending = true;
         scrollHandler.postDelayed(scrollRunnable, 16);
     }
 
+    /**
+     * 执行平滑滚动到底部。
+     * <p>
+     * 用 ValueAnimator + scrollBy 直接控制位移和时长。
+     * 新请求取消旧动画，从当前位移继续滚动，动画重叠 = 连续平滑。
+     */
     private void doScrollToBottom() {
         isScrollPending = false;
         if (autoScrollState != ChatScrollState.AUTO_SCROLL) return;
         if (getAdapter() == null || getAdapter().getItemCount() == 0) return;
 
-        int lastPos = getAdapter().getItemCount() - 1;
-        // scrollToPosition + stackFromEnd=true → LayoutManager 自动将
-        // 最后一条底部对齐 RV 底部，无需手动算 offset
-        // 关键：这是直接定位，不是动画，不会互相打断
-        scrollToPosition(lastPos);
+        // 计算剩余距离
+        int range = computeVerticalScrollRange();
+        int extent = computeVerticalScrollExtent();
+        int offset = computeVerticalScrollOffset();
+        int remainingPx = Math.max(0, range - extent - offset);
+        if (remainingPx <= 0) return;
+
+        // 取消旧动画，记录已滚动位移
+        if (scrollAnimator != null && scrollAnimator.isRunning()) {
+            scrollAnimator.cancel();
+        }
+        currentScrollDelta = 0;
+
+        // 时长：~200ms 减速动画
+        // 千问 SmoothScrollerWithOffset: min(250f/remainingPx, 7.5f) ms/px
+        // 总时间 ≈ min(250, 7.5 * remainingPx)
+        int duration = (int) Math.min(remainingPx * 7.5f, 200);
+        if (duration < 50) duration = 50;
+
+        scrollAnimator = ValueAnimator.ofInt(0, remainingPx);
+        scrollAnimator.setDuration(duration);
+        scrollAnimator.setInterpolator(new DecelerateInterpolator());
+
+        scrollAnimator.addUpdateListener(animation -> {
+            int currentDelta = (int) animation.getAnimatedValue();
+            int step = currentDelta - currentScrollDelta;
+            if (step > 0) {
+                scrollBy(0, step);
+                currentScrollDelta = currentDelta;
+            }
+        });
+        scrollAnimator.start();
     }
 
     /**
      * 强制滚动到底部（发送消息时用）。
-     * 重置状态为 AUTO_SCROLL，立即滚底。
      */
     public void forceScrollToBottom() {
         autoScrollState = ChatScrollState.AUTO_SCROLL;
         scrollHandler.removeCallbacks(scrollRunnable);
         isScrollPending = false;
+        if (scrollAnimator != null && scrollAnimator.isRunning()) {
+            scrollAnimator.cancel();
+        }
+        currentScrollDelta = 0;
         stopScroll();
         if (getAdapter() == null || getAdapter().getItemCount() == 0) return;
-        int lastPos = getAdapter().getItemCount() - 1;
-        scrollToPosition(lastPos);
+
+        int range = computeVerticalScrollRange();
+        int extent = computeVerticalScrollExtent();
+        int offset = computeVerticalScrollOffset();
+        int remainingPx = Math.max(0, range - extent - offset);
+        if (remainingPx <= 0) return;
+
+        int duration = (int) Math.min(remainingPx * 7.5f, 200);
+        if (duration < 50) duration = 50;
+
+        scrollAnimator = ValueAnimator.ofInt(0, remainingPx);
+        scrollAnimator.setDuration(duration);
+        scrollAnimator.setInterpolator(new DecelerateInterpolator());
+        scrollAnimator.addUpdateListener(animation -> {
+            int currentDelta = (int) animation.getAnimatedValue();
+            int step = currentDelta - currentScrollDelta;
+            if (step > 0) {
+                scrollBy(0, step);
+                currentScrollDelta = currentDelta;
+            }
+        });
+        scrollAnimator.start();
     }
 
-    /**
-     * 暂停自动滚动（卡片出现时调用）。
-     */
     public void pauseAutoScroll() {
         autoScrollState = ChatScrollState.NO_SCROLL;
         scrollHandler.removeCallbacks(scrollRunnable);
         isScrollPending = false;
     }
 
-    /**
-     * 恢复自动滚动，并重置高度缓存以触发一次滚动。
-     */
     public void resumeAutoScroll() {
         autoScrollState = ChatScrollState.AUTO_SCROLL;
         lastRange = 0;

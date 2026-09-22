@@ -1,5 +1,7 @@
 package com.fluid.markdown.chat;
 
+import android.graphics.Canvas;
+import android.graphics.drawable.Drawable;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -7,156 +9,234 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
-import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.core.content.res.ResourcesCompat;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.fluid.afm.markdown.ElementClickEventCallback;
+import com.fluid.afm.markdown.widget.PrinterMarkDownTextView;
+import com.fluid.afm.styles.MarkdownStyles;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 外层聊天列表 Adapter（参考 egame_cloud_phone ChatAdapter）。
+ * 扁平化聊天 Adapter（参考 egame ChatAdapter）。
  * <p>
- * 只有两种行：
- * - VT_USER：用户消息气泡
- * - VT_AI：AI 回答行，内部包含一个 RecyclerView + AnswerCardAdapter
- *   答卡内部按文本/酒店/火车/机票/天气多类型渲染，流式串联。
- * <p>
- * 流式串联核心：ChatAdapter 逐段向内层 adapter 添加内容，
- * 文本段由 AnswerCardAdapter 在 onPrintStop 回调中通知 ChatAdapter 推进下一段，
- * 卡片段添加后立即推进下一段。不使用任何轮询或延迟猜测。
+ * 架构：
+ * - 外层只有三种 Row：OwnerRow（用户消息）、AnswerRow（回答 item）、LoadingRow
+ * - 每个 AnswerEntry 持有一个 AnswerCardAdapter（仅用作回调中转）
+ * - 逐段同步添加 row 到 rows 列表，不经过异步 submitList
+ * - 头像只在每轮回答的首个 AnswerRow 上方显示（通过 margin 控制）
+ * - 气泡背景通过 AnswerBgDecoration 绘制，同组 AnswerRow 共用 entryId 形成连续圆角
  */
 public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
-    public static final int VT_USER = 0;
-    public static final int VT_AI   = 1;
+    private static final int VT_USER = 10_001;
+    private static final int VT_LOADING = 10_002;
 
-    private final List<ChatEntry> entries = new ArrayList<>();
-    private final ElementClickEventCallback callback;
-    private OnAIHeightChangedListener heightListener;
+    // ======== Entry / Row ========
 
-    public interface OnAIHeightChangedListener {
-        void onAIHeightChanged();
+    private interface Entry {
+        long getEntryId();
     }
+
+    private static class OwnerEntry implements Entry {
+        final long entryId;
+        final String text;
+        OwnerEntry(long entryId, String text) { this.entryId = entryId; this.text = text; }
+        @Override public long getEntryId() { return entryId; }
+    }
+
+    private static class AnswerEntry implements Entry {
+        final long entryId;
+        final AnswerCardAdapter adapter;
+        List<ChatItem> items = new ArrayList<>();
+        AnswerEntry(long entryId, AnswerCardAdapter adapter) { this.entryId = entryId; this.adapter = adapter; }
+        @Override public long getEntryId() { return entryId; }
+    }
+
+    private static class LoadingEntry implements Entry {
+        final long entryId;
+        LoadingEntry(long entryId) { this.entryId = entryId; }
+        @Override public long getEntryId() { return entryId; }
+    }
+
+    private interface Row {
+        long getStableId();
+    }
+
+    private static class OwnerRow implements Row {
+        final long entryId;
+        final String text;
+        OwnerRow(long entryId, String text) { this.entryId = entryId; this.text = text; }
+        @Override public long getStableId() { return stableId("owner:" + entryId); }
+    }
+
+    private static class AnswerRow implements Row {
+        final long entryId;
+        final AnswerCardAdapter adapter;
+        final int localPosition;
+        final int localItemCount;
+        final ChatItem item;
+        AnswerRow(long entryId, AnswerCardAdapter adapter, int localPosition, int localItemCount, ChatItem item) {
+            this.entryId = entryId; this.adapter = adapter;
+            this.localPosition = localPosition; this.localItemCount = localItemCount; this.item = item;
+        }
+        @Override public long getStableId() {
+            return stableId("answer:" + entryId + ":" + item.getClass().getSimpleName() + ":" + item.getId());
+        }
+    }
+
+    private static class LoadingRow implements Row {
+        final long entryId;
+        LoadingRow(long entryId) { this.entryId = entryId; }
+        @Override public long getStableId() { return stableId("loading:" + entryId); }
+    }
+
+    // ======== Adapter ========
+
+    private final List<Entry> entries = new ArrayList<>();
+    private final List<Row> rows = new ArrayList<>();
+    private long nextEntryId = 0;
+    private final ElementClickEventCallback callback;
+    private ChatRecyclerView chatRV;
+    private Drawable answerBgDrawable;
+    private int answerBgMarginDp = 0; // 左右边距，0 = 全宽
 
     public ChatAdapter(ElementClickEventCallback callback) {
         this.callback = callback;
+        setHasStableIds(true);
     }
 
-    public void setOnAIHeightChangedListener(OnAIHeightChangedListener listener) {
-        this.heightListener = listener;
+    public void setChatRecyclerView(ChatRecyclerView rv) {
+        this.chatRV = rv;
     }
 
-    /**
-     * 外层 item 数据
-     */
-    private static class ChatEntry {
-        final int viewType;
-        String userText;
-        // AI 回复
-        String fullResponse;
-        List<ChatMessage.Segment> segments;
-        int currentSegmentIndex;
-        AnswerCardAdapter innerAdapter;
-
-        ChatEntry(int viewType) {
-            this.viewType = viewType;
-        }
+    public void setAnswerBackgroundDrawable(Drawable drawable) {
+        this.answerBgDrawable = drawable;
     }
 
     /**
      * 添加用户消息。
      */
     public void addUserMessage(String text) {
-        ChatEntry entry = new ChatEntry(VT_USER);
-        entry.userText = text;
+        OwnerEntry entry = new OwnerEntry(nextEntryId++, text);
         entries.add(entry);
-        notifyItemInserted(entries.size() - 1);
+        int pos = rows.size();
+        rows.add(new OwnerRow(entry.entryId, text));
+        notifyItemInserted(pos);
     }
 
     /**
-     * 添加 AI 回复（自动拆分为 segments，逐段流式渲染）。
+     * 添加 AI 回复（直接同步管理 rows，逐段流式渲染）。
      */
     public void addAIResponse(String fullResponse) {
-        ChatEntry entry = new ChatEntry(VT_AI);
-        entry.fullResponse = fullResponse;
-        entry.segments = ChatMessage.parseSegments(fullResponse);
-        entry.currentSegmentIndex = 0;
+        AnswerCardAdapter answerAdapter = new AnswerCardAdapter(callback);
+        final int[] segIdx = {0};
 
-        // 创建内层 adapter
-        entry.innerAdapter = new AnswerCardAdapter(callback);
-        entry.innerAdapter.setOnHeightChangedListener(() -> {
-            if (heightListener != null) heightListener.onAIHeightChanged();
+        // 高度变化 → 外层 RV 滚动
+        answerAdapter.setOnHeightChangedListener(() -> {
+            if (chatRV != null) chatRV.requestScrollToBottom();
         });
 
-        // 设置内层 adapter 的流式完成回调：当一段文本打印完成时，推进下一段
-        final int entryIndex = entries.size();
-        entry.innerAdapter.setOnStreamCompleteListener(() -> streamNextSegment(entryIndex));
+        // 流式完成 → 推进下一段
+        final AnswerEntry entry = new AnswerEntry(nextEntryId++, answerAdapter);
+        answerAdapter.setOnStreamCompleteListener(() -> {
+            streamNextSegment(entry, fullResponse, segIdx);
+        });
 
         entries.add(entry);
-        notifyItemInserted(entries.size() - 1);
 
-        // 开始第一段
-        streamNextSegment(entries.size() - 1);
+        // 开始逐段添加
+        streamNextSegment(entry, fullResponse, segIdx);
     }
 
     /**
-     * 逐段向内层 adapter 添加内容。
-     * - 文本段：addTextItem 后等待 onPrintStop 回调再推进下一段
-     * - 卡片段：addCardItem 后立即推进下一段
+     * 逐段直接添加 row 到 rows 列表（同步，不经过异步 submitList）。
      */
-    private void streamNextSegment(int entryIndex) {
-        if (entryIndex < 0 || entryIndex >= entries.size()) return;
-        ChatEntry entry = entries.get(entryIndex);
-        if (entry.currentSegmentIndex >= entry.segments.size()) return;
+    private void streamNextSegment(AnswerEntry entry, String fullResponse, int[] segIdx) {
+        List<ChatMessage.Segment> segments = ChatMessage.parseSegments(fullResponse);
+        if (segIdx[0] >= segments.size()) return;
 
-        ChatMessage.Segment seg = entry.segments.get(entry.currentSegmentIndex);
+        ChatMessage.Segment seg = segments.get(segIdx[0]);
+        String itemId = "seg_" + segIdx[0];
 
         if (seg.type == ChatMessage.Segment.TYPE_TEXT) {
-            // 文本段：添加到内层 adapter，流式打印完成后由 onStreamComplete 回调推进
             if (seg.content == null || seg.content.isEmpty()) {
-                // 空文本段直接跳过
-                entry.currentSegmentIndex++;
-                streamNextSegment(entryIndex);
+                segIdx[0]++;
+                streamNextSegment(entry, fullResponse, segIdx);
                 return;
             }
-            entry.innerAdapter.addTextItem(seg.content);
-            entry.currentSegmentIndex++;
-            // 不在这里推进——等 AnswerCardAdapter.onPrintStop → onStreamComplete 回调
+            ChatItem.TextItem textItem = new ChatItem.TextItem(itemId, seg.content, true);
+            addAnswerRow(entry, textItem);
+            segIdx[0]++;
+            // 等 onPrintStop → onStreamComplete → 再调 streamNextSegment
         } else {
-            // 卡片段：直接添加到内层 adapter，立即推进下一段
-            int cardType;
+            ChatItem cardItem;
             switch (seg.type) {
-                case ChatMessage.Segment.TYPE_HOTEL_CARD:   cardType = AnswerCardAdapter.VT_HOTEL; break;
-                case ChatMessage.Segment.TYPE_TRAIN_CARD:   cardType = AnswerCardAdapter.VT_TRAIN; break;
-                case ChatMessage.Segment.TYPE_FLIGHT_CARD:  cardType = AnswerCardAdapter.VT_FLIGHT; break;
-                case ChatMessage.Segment.TYPE_WEATHER_CARD:  cardType = AnswerCardAdapter.VT_WEATHER; break;
-                default: cardType = AnswerCardAdapter.VT_TEXT; break;
+                case ChatMessage.Segment.TYPE_HOTEL_CARD:
+                    cardItem = new ChatItem.HotelCardItem(itemId, seg.content);
+                    break;
+                case ChatMessage.Segment.TYPE_TRAIN_CARD:
+                    cardItem = new ChatItem.TrainCardItem(itemId, seg.content);
+                    break;
+                case ChatMessage.Segment.TYPE_FLIGHT_CARD:
+                    cardItem = new ChatItem.FlightCardItem(itemId, seg.content);
+                    break;
+                case ChatMessage.Segment.TYPE_WEATHER_CARD:
+                    cardItem = new ChatItem.WeatherCardItem(itemId, seg.content);
+                    break;
+                default:
+                    cardItem = new ChatItem.TextItem(itemId, seg.content, true);
+                    break;
             }
-            entry.innerAdapter.addCardItem(cardType, seg.content);
-            entry.currentSegmentIndex++;
-            // 卡片不需要流式，等布局完成后立即推进下一段
-            entry.innerAdapter.notifyItemChanged(entry.innerAdapter.getItemCount() - 1);
-            // 用 post 等卡片布局完成再继续
-            final int ei = entryIndex;
-            // 通过 ViewTreeObserver 等待布局完成
-            if (heightListener != null) heightListener.onAIHeightChanged();
-            // 直接推进（卡片是同步添加的，不需要等打印）
-            // 但要等 RecyclerView 布局完成，用 post
-            android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
-            h.post(() -> streamNextSegment(ei));
+            addAnswerRow(entry, cardItem);
+            segIdx[0]++;
+            // 卡片不需要流式，post 后继续下一段
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(
+                    () -> streamNextSegment(entry, fullResponse, segIdx));
         }
     }
 
-    @Override
-    public int getItemViewType(int position) {
-        return entries.get(position).viewType;
+    /**
+     * 直接向 rows 列表添加一个 AnswerRow 并通知 RecyclerView。
+     */
+    private void addAnswerRow(AnswerEntry entry, ChatItem item) {
+        entry.items.add(item);
+        int entryIndex = entries.indexOf(entry);
+        int insertPos = entryStartPosition(entryIndex) + entry.items.size() - 1;
+        AnswerRow row = new AnswerRow(entry.entryId, entry.adapter,
+                entry.items.size() - 1, entry.items.size(), item);
+        rows.add(insertPos, row);
+        notifyItemInserted(insertPos);
+        if (chatRV != null) chatRV.requestScrollToBottom();
     }
 
+    private int entryStartPosition(int entryIndex) {
+        int pos = 0;
+        for (int i = 0; i < entryIndex; i++) {
+            Entry e = entries.get(i);
+            if (e instanceof OwnerEntry || e instanceof LoadingEntry) pos += 1;
+            else if (e instanceof AnswerEntry) pos += ((AnswerEntry) e).items.size();
+        }
+        return pos;
+    }
+
+    // ======== RecyclerView.Adapter ========
+
     @Override
-    public int getItemCount() {
-        return entries.size();
+    public int getItemCount() { return rows.size(); }
+
+    @Override
+    public long getItemId(int position) { return rows.get(position).getStableId(); }
+
+    @Override
+    public int getItemViewType(int position) {
+        Row row = rows.get(position);
+        if (row instanceof OwnerRow) return VT_USER;
+        if (row instanceof LoadingRow) return VT_LOADING;
+        if (row instanceof AnswerRow) return ((AnswerRow) row).item.getViewType();
+        return 0;
     }
 
     @NonNull
@@ -170,60 +250,254 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     parent.getContext().getResources().getIdentifier("item_chat_user", "layout", pkg),
                     parent, false);
             return new UserVH(view);
-        } else {
-            View view = inflater.inflate(
-                    parent.getContext().getResources().getIdentifier("item_chat_ai", "layout", pkg),
-                    parent, false);
-            return new AIVH(view);
         }
+        if (viewType == VT_LOADING) {
+            TextView tv = new TextView(parent.getContext());
+            tv.setText("思考中...");
+            tv.setPadding(dp(parent, 16), dp(parent, 8), dp(parent, 16), dp(parent, 8));
+            return new LoadingVH(tv);
+        }
+
+        // Answer item：用 item_chat_answer 布局
+        View view = inflater.inflate(
+                parent.getContext().getResources().getIdentifier("item_chat_answer", "layout", pkg),
+                parent, false);
+        return new AnswerVH(view);
     }
 
     @Override
     public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
-        ChatEntry entry = entries.get(position);
-        if (holder instanceof UserVH) {
-            ((UserVH) holder).bind(entry.userText);
-        } else if (holder instanceof AIVH) {
-            ((AIVH) holder).bind(entry);
+        Row row = rows.get(position);
+        if (row instanceof OwnerRow) {
+            ((UserVH) holder).bind(((OwnerRow) row).text);
+        } else if (row instanceof AnswerRow) {
+            AnswerRow ar = (AnswerRow) row;
+            // 间距控制：首项有头像 + topMargin，其余项无
+            applyAnswerItemSpacing(holder, ar.localPosition, ar.localItemCount);
+            // 委托给 AnswerCardAdapter 的 onBindViewHolder
+            ((AnswerVH) holder).bind(ar, callback);
         }
     }
 
-    // ==================== User ViewHolder ====================
+    /**
+     * 回答 item 间距（参考 egame AnswerItemUiHelper）。
+     * 首项显示头像 + topMargin，其余项 topMargin=0 无头像。
+     */
+    private void applyAnswerItemSpacing(RecyclerView.ViewHolder holder, int localPosition, int localItemCount) {
+        ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) holder.itemView.getLayoutParams();
+        if (localPosition == 0) {
+            lp.topMargin = dp(holder.itemView, 16);
+        } else {
+            lp.topMargin = 0;
+        }
+        lp.bottomMargin = 0;
+        holder.itemView.setLayoutParams(lp);
+
+        // 控制头像可见性
+        AnswerVH avh = (AnswerVH) holder;
+        avh.avatarContainer.setVisibility(localPosition == 0 ? View.VISIBLE : View.GONE);
+    }
+
+    // ======== ViewHolders ========
 
     static class UserVH extends RecyclerView.ViewHolder {
         final TextView textView;
-
         UserVH(@NonNull View itemView) {
             super(itemView);
             int id = itemView.getContext().getResources().getIdentifier(
                     "tv_user_message", "id", itemView.getContext().getPackageName());
             textView = itemView.findViewById(id);
         }
+        void bind(String text) { textView.setText(text); }
+    }
 
-        void bind(String text) {
-            textView.setText(text);
+    static class LoadingVH extends RecyclerView.ViewHolder {
+        LoadingVH(@NonNull View itemView) { super(itemView); }
+    }
+
+    /**
+     * 回答 item ViewHolder。
+     * 布局包含：头像区（首项可见）+ 内容容器（交给 AnswerCardAdapter 渲染）。
+     */
+    static class AnswerVH extends RecyclerView.ViewHolder {
+        final View avatarContainer;
+        final LinearLayout contentContainer;
+
+        AnswerVH(@NonNull View itemView) {
+            super(itemView);
+            String pkg = itemView.getContext().getPackageName();
+            int avatarId = itemView.getContext().getResources().getIdentifier("avatar_container", "id", pkg);
+            int containerId = itemView.getContext().getResources().getIdentifier("content_container", "id", pkg);
+            avatarContainer = itemView.findViewById(avatarId);
+            contentContainer = itemView.findViewById(containerId);
+        }
+
+        void bind(AnswerRow row, ElementClickEventCallback callback) {
+            ChatItem item = row.item;
+
+            contentContainer.removeAllViews();
+
+            if (item instanceof ChatItem.TextItem) {
+                PrinterMarkDownTextView tv = new PrinterMarkDownTextView(itemView.getContext());
+                MarkdownStyles styles = MarkdownStyles.getDefaultStyles();
+                tv.init(styles, callback);
+                tv.setPrintParams(25, 1);
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                tv.setLayoutParams(lp);
+                contentContainer.addView(tv);
+
+                ChatItem.TextItem textItem = (ChatItem.TextItem) item;
+                if (!textItem.isStreaming && textItem.printData != null
+                        && textItem.printData.showingText != null) {
+                    // 已完成打印且有缓存：直接 restore（不先 setPrintData，否则 restore 会跳过）
+                    tv.restore(textItem.printData);
+                } else if (!textItem.isStreaming) {
+                    // 已完成但无缓存（历史 item 等）：直接 setMarkdownText
+                    tv.setMarkdownText(textItem.text);
+                    tv.post(() -> tv.setMinHeight(0));
+                } else {
+                    // 流式打印
+                    if (textItem.printData == null) {
+                        textItem.printData = new PrinterMarkDownTextView.MarkDownPrintData();
+                    }
+                    tv.setPrintData(textItem.printData);
+                    tv.startPrinting(textItem.text);
+                    tv.setPrintingEventListener(new PrinterMarkDownTextView.PrintingEventListener() {
+                        @Override public void onPrintStart() {}
+                        @Override public void onPrintStop(boolean printAll) {
+                            textItem.isStreaming = false;
+                            // 保存 showingText 供复用时 restore
+                            if (textItem.printData != null && textItem.printData.parsedMarkdownText != null) {
+                                textItem.printData.showingText = textItem.printData.parsedMarkdownText;
+                            }
+                            // 通知 AnswerCardAdapter 推进下一段
+                            row.adapter.notifyStreamComplete();
+                            row.adapter.notifyTextContentHeightChanged();
+                        }
+                        @Override public void onPrintPaused(int index) {}
+                        @Override public void onPrintResumed() {}
+                    });
+                    tv.setSizeChangedListener((width, height) -> {
+                        // 通知外层 RV 滚动
+                        View p = itemView;
+                        while (p != null && !(p.getParent() instanceof ChatRecyclerView)) {
+                            p = (View) p.getParent();
+                        }
+                        if (p != null && p.getParent() instanceof ChatRecyclerView) {
+                            ((ChatRecyclerView) p.getParent()).requestScrollToBottom();
+                        }
+                    });
+                }
+            } else {
+                // 卡片
+                if (item instanceof ChatItem.HotelCardItem) {
+                    HotelCardView v = new HotelCardView(itemView.getContext());
+                    v.bind(HotelCardData.fromJson(((ChatItem.HotelCardItem) item).json));
+                    contentContainer.addView(v);
+                } else if (item instanceof ChatItem.TrainCardItem) {
+                    TrainCardView v = new TrainCardView(itemView.getContext());
+                    v.bind(TrainCardData.fromJson(((ChatItem.TrainCardItem) item).json));
+                    contentContainer.addView(v);
+                } else if (item instanceof ChatItem.FlightCardItem) {
+                    FlightCardView v = new FlightCardView(itemView.getContext());
+                    v.bind(FlightCardData.fromJson(((ChatItem.FlightCardItem) item).json));
+                    contentContainer.addView(v);
+                } else if (item instanceof ChatItem.WeatherCardItem) {
+                    WeatherCardView v = new WeatherCardView(itemView.getContext());
+                    v.bind(WeatherCardData.fromJson(((ChatItem.WeatherCardItem) item).json));
+                    contentContainer.addView(v);
+                }
+            }
         }
     }
 
-    // ==================== AI ViewHolder（含内层 RecyclerView） ====================
+    // ======== ItemDecoration：连续圆角背景 ========
 
-    static class AIVH extends RecyclerView.ViewHolder {
-        final RecyclerView innerRV;
+    /**
+     * 回答背景 ItemDecoration（参考 egame ConcatAdapterBackgroundDecoration）。
+     * 同一 entryId 的 AnswerRow 形成连续圆角背景块。
+     */
+    public static class AnswerBgDecoration extends RecyclerView.ItemDecoration {
+        private final Drawable background;
+        private final ChatAdapter adapter;
+        private final int marginPx;
 
-        AIVH(@NonNull View itemView) {
-            super(itemView);
-            int id = itemView.getContext().getResources().getIdentifier(
-                    "inner_rv", "id", itemView.getContext().getPackageName());
-            innerRV = itemView.findViewById(id);
+        public AnswerBgDecoration(Drawable background, ChatAdapter adapter, int marginDp) {
+            this.background = background;
+            this.adapter = adapter;
+            this.marginPx = (int) (marginDp * background.getBounds().width() / background.getIntrinsicWidth());
         }
 
-        void bind(ChatEntry entry) {
-            if (innerRV.getAdapter() != entry.innerAdapter) {
-                innerRV.setLayoutManager(new LinearLayoutManager(itemView.getContext(),
-                        LinearLayoutManager.VERTICAL, false));
-                innerRV.setNestedScrollingEnabled(false);
-                innerRV.setAdapter(entry.innerAdapter);
+        @Override
+        public void onDraw(@NonNull Canvas c, @NonNull RecyclerView parent, @NonNull RecyclerView.State state) {
+            if (background == null) return;
+
+            float density = parent.getContext().getResources().getDisplayMetrics().density;
+            int baseMargin = (int) (0 * density); // 左右边距 0
+            int padTop = (int) (6 * density);
+            int padBottom = (int) (6 * density);
+
+            Long currentGroupKey = null;
+            int groupLeft = Integer.MAX_VALUE, groupTop = Integer.MAX_VALUE;
+            int groupRight = Integer.MIN_VALUE, groupBottom = Integer.MIN_VALUE;
+
+            for (int i = 0; i < parent.getChildCount(); i++) {
+                View child = parent.getChildAt(i);
+                int pos = parent.getChildAdapterPosition(child);
+                if (pos < 0) continue;
+
+                Row row = adapter.rows.get(pos);
+                if (!(row instanceof AnswerRow)) {
+                    // 非回答行，切断背景
+                    drawGroup(c, groupLeft, groupTop, groupRight, groupBottom, baseMargin, padTop, padBottom);
+                    groupLeft = Integer.MAX_VALUE; groupTop = Integer.MAX_VALUE;
+                    groupRight = Integer.MIN_VALUE; groupBottom = Integer.MIN_VALUE;
+                    currentGroupKey = null;
+                    continue;
+                }
+
+                AnswerRow ar = (AnswerRow) row;
+                long groupKey = ar.entryId;
+
+                if (currentGroupKey != null && currentGroupKey != groupKey) {
+                    drawGroup(c, groupLeft, groupTop, groupRight, groupBottom, baseMargin, padTop, padBottom);
+                    groupLeft = Integer.MAX_VALUE; groupTop = Integer.MAX_VALUE;
+                    groupRight = Integer.MIN_VALUE; groupBottom = Integer.MIN_VALUE;
+                }
+
+                currentGroupKey = groupKey;
+                groupLeft = Math.min(groupLeft, child.getLeft());
+                groupTop = Math.min(groupTop, child.getTop());
+                groupRight = Math.max(groupRight, child.getRight());
+                groupBottom = Math.max(groupBottom, child.getBottom());
             }
+            drawGroup(c, groupLeft, groupTop, groupRight, groupBottom, baseMargin, padTop, padBottom);
         }
+
+        private void drawGroup(Canvas c, int left, int top, int right, int bottom, int margin, int padTop, int padBottom) {
+            if (left == Integer.MAX_VALUE) return;
+            background.setBounds(left + margin, top - padTop, right - margin, bottom + padBottom);
+            background.draw(c);
+        }
+    }
+
+    // ======== Utils ========
+
+    private static long stableId(String value) {
+        long result = 1469598103934665603L;
+        for (int i = 0; i < value.length(); i++) {
+            result ^= value.charAt(i);
+            result *= 1099511628211L;
+        }
+        return result;
+    }
+
+    private int dp(View view, float v) {
+        return (int) (v * view.getContext().getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private int dp(ViewGroup parent, float v) {
+        return (int) (v * parent.getContext().getResources().getDisplayMetrics().density + 0.5f);
     }
 }

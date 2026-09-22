@@ -1,5 +1,7 @@
 package com.fluid.markdown.chat;
 
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -24,11 +26,12 @@ import java.util.Map;
 /**
  * AI 对话页（模拟千问聊天主界面）。
  * <p>
- * 架构（参考 egame_cloud_phone）：
- * - 外层 ChatRecyclerView：用户消息 + AI 回答行
- * - 每个 AI 回答行内部有一个内层 RecyclerView + AnswerCardAdapter
- * - AnswerCardAdapter 管理多种卡片类型（文本/酒店/火车/机票/天气）
- * - 流式串联：文本段打印完成后自动添加下一段
+ * 架构（参考 egame_cloud_phone 扁平化）：
+ * - 只有一个 ChatRecyclerView，所有 item 在同一层
+ * - 外层 ChatAdapter 扁平化展开 AnswerCardAdapter 的 item
+ * - 头像只在每轮回答首个 item 上方显示
+ * - 气泡背景通过 ItemDecoration 绘制，同组共用连续圆角
+ * - 流式打印时高度变化直接驱动 RV 滚动
  */
 public class ChatActivity extends AppCompatActivity {
 
@@ -54,18 +57,20 @@ public class ChatActivity extends AppCompatActivity {
 
     private void initViews() {
         recyclerView = findViewById(getResourceId("chat_recycler_view"));
-        inputEdit = findViewById(getResourceId("et_input"));
+        inputEdit = getResourceId("et_input") == 0 ? null : findViewById(getResourceId("et_input"));
         sendButton = findViewById(getResourceId("btn_send"));
         findViewById(getResourceId("chat_back")).setOnClickListener(v -> finish());
         sendButton.setOnClickListener(v -> handleSend());
-        inputEdit.addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
-            @Override public void afterTextChanged(Editable s) {
-                sendButton.setEnabled(s.length() > 0);
-                sendButton.setAlpha(s.length() > 0 ? 1.0f : 0.4f);
-            }
-        });
+        if (inputEdit != null) {
+            inputEdit.addTextChangedListener(new TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+                @Override public void afterTextChanged(Editable s) {
+                    sendButton.setEnabled(s.length() > 0);
+                    sendButton.setAlpha(s.length() > 0 ? 1.0f : 0.4f);
+                }
+            });
+        }
     }
 
     private void initRecyclerView() {
@@ -81,38 +86,43 @@ public class ChatActivity extends AppCompatActivity {
                                                                SpanTextClickableSpan.ClickableTextType type) { return false; }
             @Override public void exposureSpmBehavior(List<EventModel> models) {}
         });
+        adapter.setChatRecyclerView(recyclerView);
 
-        // AI 回答内部高度变化时，触发外层自动滚动
-        adapter.setOnAIHeightChangedListener(() -> recyclerView.requestScrollToBottom());
+        // 气泡背景（圆角白色）
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xFFFFFFFF);
+        bg.setCornerRadius(dp(12));
+        bg.setStroke(1, 0xFFEAEAEA);
+        adapter.setAnswerBackgroundDrawable(bg);
 
         recyclerView.setAdapter(adapter);
+
+        // 添加背景 ItemDecoration
+        recyclerView.addItemDecoration(new ChatAdapter.AnswerBgDecoration(bg, adapter, 0));
     }
 
     private void sendInitialMessage() {
         adapter.addUserMessage("帮我规划明天杭州出行");
         handler.postDelayed(() -> {
-            String response = MockSSESource.buildTravelPlan();
-            adapter.addAIResponse(response);
+            adapter.addAIResponse(MockSSESource.buildTravelPlan());
             recyclerView.forceScrollToBottom();
         }, 500);
     }
 
     private void handleSend() {
-        String text = inputEdit.getText().toString().trim();
+        String text = inputEdit != null ? inputEdit.getText().toString().trim() : "";
         if (text.isEmpty()) return;
 
         adapter.addUserMessage(text);
         inputEdit.setText("");
 
         handler.postDelayed(() -> {
-            String response = selectResponse(text);
-            adapter.addAIResponse(response);
+            adapter.addAIResponse(selectResponse(text));
             recyclerView.forceScrollToBottom();
         }, 500);
     }
 
     private String selectResponse(String text) {
-        String lower = text.toLowerCase();
         if (containsAny(text, "出行", "旅游", "旅行", "行程", "规划")) {
             return MockSSESource.buildTravelPlan();
         }
@@ -143,6 +153,10 @@ public class ChatActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         handler.removeCallbacksAndMessages(null);
+    }
+
+    private int dp(float v) {
+        return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
     }
 
     private int getResourceId(String name) {

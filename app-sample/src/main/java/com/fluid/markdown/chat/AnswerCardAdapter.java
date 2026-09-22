@@ -1,10 +1,13 @@
 package com.fluid.markdown.chat;
 
+import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.LinearLayout;
 
 import androidx.annotation.NonNull;
+import androidx.recyclerview.widget.DiffUtil;
+import androidx.recyclerview.widget.ListAdapter;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.fluid.afm.markdown.ElementClickEventCallback;
@@ -13,20 +16,17 @@ import com.fluid.afm.styles.MarkdownStyles;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
 
 /**
- * 内层回答卡片 Adapter（参考 egame_cloud_phone UnifiedAnswerCardAdapter）。
+ * 内层回答 Adapter（参考 egame UnifiedAnswerCardAdapter）。
  * <p>
- * 每条 AI 回复对应一个 AnswerCardAdapter，内部管理多种 ViewType：
- * - VT_TEXT：Markdown 文本（流式打印）
- * - VT_HOTEL：酒店卡片
- * - VT_TRAIN：火车票卡片
- * - VT_FLIGHT：机票卡片
- * - VT_WEATHER：天气卡片
+ * 继承 ListAdapter，内部管理多种 ChatItem。
+ * 外层 ChatAdapter 订阅它的 item 列表变化，扁平化展开到外层 RV。
  * <p>
- * 流式串联：文本 item 打印完成后 onPrintStop → onStreamComplete 回调通知外层推进下一段。
+ * 流式串联：文本 item 打印完成后 onPrintStop → onStreamComplete → 推进下一段。
  */
-public class AnswerCardAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+public class AnswerCardAdapter extends ListAdapter<ChatItem, RecyclerView.ViewHolder> {
 
     public static final int VT_TEXT    = 0;
     public static final int VT_HOTEL   = 1;
@@ -34,32 +34,54 @@ public class AnswerCardAdapter extends RecyclerView.Adapter<RecyclerView.ViewHol
     public static final int VT_FLIGHT  = 3;
     public static final int VT_WEATHER = 4;
 
-    private static class AnswerItem {
-        int viewType;
-        String content;
-        boolean isStreaming;
-        boolean streamDone;
-        PrinterMarkDownTextView.MarkDownPrintData printData;
-    }
-
-    private final List<AnswerItem> items = new ArrayList<>();
     private final ElementClickEventCallback callback;
-    private OnHeightChangedListener heightListener;
+    private final List<Function<List<ChatItem>, Void>> itemsChangedObservers = new ArrayList<>();
     private OnStreamCompleteListener streamCompleteListener;
+    private OnHeightChangedListener heightListener;
 
     public interface OnHeightChangedListener {
         void onHeightChanged();
     }
 
     public interface OnStreamCompleteListener {
-        /**
-         * 当前文本段流式打印完成。
-         */
         void onStreamComplete();
     }
 
     public AnswerCardAdapter(ElementClickEventCallback callback) {
+        super(new DiffUtil.ItemCallback<ChatItem>() {
+            @Override
+            public boolean areItemsTheSame(ChatItem oldItem, ChatItem newItem) {
+                return oldItem.getClass() == newItem.getClass() && oldItem.getId().equals(newItem.getId());
+            }
+
+            @Override
+            public boolean areContentsTheSame(ChatItem oldItem, ChatItem newItem) {
+                if (oldItem instanceof ChatItem.TextItem && newItem instanceof ChatItem.TextItem) {
+                    ChatItem.TextItem o = (ChatItem.TextItem) oldItem;
+                    ChatItem.TextItem n = (ChatItem.TextItem) newItem;
+                    return o.text.equals(n.text) && o.isStreaming == n.isStreaming;
+                }
+                return oldItem.getId().equals(newItem.getId());
+            }
+
+            @Override
+            public Object getChangePayload(ChatItem oldItem, ChatItem newItem) {
+                if (oldItem instanceof ChatItem.TextItem && newItem instanceof ChatItem.TextItem) {
+                    return "PAYLOAD_TEXT_UPDATE";
+                }
+                return null;
+            }
+        });
         this.callback = callback;
+    }
+
+    /**
+     * 通知流式打印完成（由外层 ChatAdapter.AnswerVH 调用）。
+     */
+    public void notifyStreamComplete() {
+        if (streamCompleteListener != null) {
+            streamCompleteListener.onStreamComplete();
+        }
     }
 
     public void setOnHeightChangedListener(OnHeightChangedListener listener) {
@@ -70,40 +92,39 @@ public class AnswerCardAdapter extends RecyclerView.Adapter<RecyclerView.ViewHol
         this.streamCompleteListener = listener;
     }
 
-    /**
-     * 添加一个文本段（流式）。
-     */
-    public void addTextItem(String text) {
-        AnswerItem item = new AnswerItem();
-        item.viewType = VT_TEXT;
-        item.content = text;
-        item.isStreaming = true;
-        item.streamDone = false;
-        items.add(item);
-        notifyItemInserted(items.size() - 1);
+    public void addItemsChangedObserver(Function<List<ChatItem>, Void> observer) {
+        itemsChangedObservers.add(observer);
+    }
+
+    public void removeItemsChangedObserver(Function<List<ChatItem>, Void> observer) {
+        itemsChangedObservers.remove(observer);
+    }
+
+    public List<ChatItem> getItems() {
+        return getCurrentList();
     }
 
     /**
-     * 添加一个卡片段（直接显示）。
+     * 提交新列表并通知观察者。
      */
-    public void addCardItem(int cardType, String json) {
-        AnswerItem item = new AnswerItem();
-        item.viewType = cardType;
-        item.content = json;
-        item.isStreaming = false;
-        item.streamDone = true;
-        items.add(item);
-        notifyItemInserted(items.size() - 1);
+    public void submitItems(List<ChatItem> newItems) {
+        submitList(new ArrayList<>(newItems), () -> {
+            for (Function<List<ChatItem>, Void> observer : itemsChangedObservers) {
+                observer.apply(getCurrentList());
+            }
+        });
+    }
+
+    /**
+     * 通知高度变化（由 TextVH 调用）。
+     */
+    public void notifyTextContentHeightChanged() {
+        if (heightListener != null) heightListener.onHeightChanged();
     }
 
     @Override
     public int getItemViewType(int position) {
-        return items.get(position).viewType;
-    }
-
-    @Override
-    public int getItemCount() {
-        return items.size();
+        return getItem(position).getViewType();
     }
 
     @NonNull
@@ -113,36 +134,39 @@ public class AnswerCardAdapter extends RecyclerView.Adapter<RecyclerView.ViewHol
             PrinterMarkDownTextView tv = new PrinterMarkDownTextView(parent.getContext());
             MarkdownStyles styles = MarkdownStyles.getDefaultStyles();
             tv.init(styles, callback);
-            tv.setPrintParams(20, 2);
+            tv.setPrintParams(25, 1);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT);
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             tv.setLayoutParams(lp);
             return new TextVH(tv);
         }
 
         LinearLayout container = new LinearLayout(parent.getContext());
         container.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT);
-        container.setLayoutParams(lp);
+        container.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         return new CardVH(container);
     }
 
     @Override
     public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position) {
-        AnswerItem item = items.get(position);
-
+        ChatItem item = getItem(position);
         if (holder instanceof TextVH) {
-            ((TextVH) holder).bind(item, position, this);
+            ((TextVH) holder).bind((ChatItem.TextItem) item, this);
         } else if (holder instanceof CardVH) {
-            ((CardVH) holder).bind(item.viewType, item.content);
-            if (heightListener != null) {
-                holder.itemView.post(() -> {
-                    if (heightListener != null) heightListener.onHeightChanged();
-                });
-            }
+            ((CardVH) holder).bind(item);
+        }
+    }
+
+    @Override
+    public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position, @NonNull List<Object> payloads) {
+        if (payloads.isEmpty()) {
+            onBindViewHolder(holder, position);
+            return;
+        }
+        ChatItem item = getItem(position);
+        if (holder instanceof TextVH) {
+            ((TextVH) holder).bindIncremental((ChatItem.TextItem) item, this);
         }
     }
 
@@ -150,53 +174,59 @@ public class AnswerCardAdapter extends RecyclerView.Adapter<RecyclerView.ViewHol
 
     static class TextVH extends RecyclerView.ViewHolder {
         final PrinterMarkDownTextView textView;
+        private int lastNotifiedHeight = 0;
 
         TextVH(PrinterMarkDownTextView tv) {
             super(tv);
             this.textView = tv;
         }
 
-        void bind(AnswerItem item, int position, AnswerCardAdapter adapter) {
-            if (!item.isStreaming || item.streamDone) {
-                // 复用或已完成：直接渲染
-                if (item.printData != null) {
-                    textView.setPrintData(item.printData);
-                    textView.restore(item.printData);
-                } else {
-                    textView.setMarkdownText(item.content);
-                    textView.post(() -> textView.setMinHeight(0));
-                }
+        void bind(ChatItem.TextItem item, AnswerCardAdapter adapter) {
+            if (item.printData != null && !item.isStreaming) {
+                textView.setPrintData(item.printData);
+                textView.restore(item.printData);
+                return;
+            }
+
+            if (!item.isStreaming) {
+                textView.setMarkdownText(item.text);
+                textView.post(() -> textView.setMinHeight(0));
                 return;
             }
 
             // 流式打印
             if (item.printData == null) {
                 item.printData = new PrinterMarkDownTextView.MarkDownPrintData();
-                textView.setPrintData(item.printData);
-            } else {
-                textView.setPrintData(item.printData);
             }
-
-            textView.startPrinting(item.content);
+            textView.setPrintData(item.printData);
+            textView.startPrinting(item.text);
             textView.setPrintingEventListener(new PrinterMarkDownTextView.PrintingEventListener() {
                 @Override public void onPrintStart() {}
                 @Override public void onPrintStop(boolean printAll) {
-                    item.streamDone = true;
-                    // 通知外层 adapter 推进下一段
+                    item.isStreaming = false;
                     if (adapter.streamCompleteListener != null) {
                         adapter.streamCompleteListener.onStreamComplete();
                     }
-                    if (adapter.heightListener != null) {
-                        adapter.heightListener.onHeightChanged();
-                    }
+                    if (adapter.heightListener != null) adapter.heightListener.onHeightChanged();
                 }
                 @Override public void onPrintPaused(int index) {}
                 @Override public void onPrintResumed() {}
             });
 
+            lastNotifiedHeight = 0;
             textView.setSizeChangedListener((width, height) -> {
-                if (adapter.heightListener != null) adapter.heightListener.onHeightChanged();
+                if (height <= lastNotifiedHeight) return;
+                lastNotifiedHeight = height;
+                adapter.notifyTextContentHeightChanged();
             });
+        }
+
+        void bindIncremental(ChatItem.TextItem item, AnswerCardAdapter adapter) {
+            if (item.isStreaming && textView.isStarted()) {
+                textView.appendPrinting(item.text, false);
+            } else {
+                bind(item, adapter);
+            }
         }
     }
 
@@ -210,33 +240,24 @@ public class AnswerCardAdapter extends RecyclerView.Adapter<RecyclerView.ViewHol
             this.container = container;
         }
 
-        void bind(int viewType, String json) {
+        void bind(ChatItem item) {
             container.removeAllViews();
-            switch (viewType) {
-                case VT_HOTEL: {
-                    HotelCardView v = new HotelCardView(container.getContext());
-                    v.bind(HotelCardData.fromJson(json));
-                    container.addView(v);
-                    break;
-                }
-                case VT_TRAIN: {
-                    TrainCardView v = new TrainCardView(container.getContext());
-                    v.bind(TrainCardData.fromJson(json));
-                    container.addView(v);
-                    break;
-                }
-                case VT_FLIGHT: {
-                    FlightCardView v = new FlightCardView(container.getContext());
-                    v.bind(FlightCardData.fromJson(json));
-                    container.addView(v);
-                    break;
-                }
-                case VT_WEATHER: {
-                    WeatherCardView v = new WeatherCardView(container.getContext());
-                    v.bind(WeatherCardData.fromJson(json));
-                    container.addView(v);
-                    break;
-                }
+            if (item instanceof ChatItem.HotelCardItem) {
+                HotelCardView v = new HotelCardView(container.getContext());
+                v.bind(HotelCardData.fromJson(((ChatItem.HotelCardItem) item).json));
+                container.addView(v);
+            } else if (item instanceof ChatItem.TrainCardItem) {
+                TrainCardView v = new TrainCardView(container.getContext());
+                v.bind(TrainCardData.fromJson(((ChatItem.TrainCardItem) item).json));
+                container.addView(v);
+            } else if (item instanceof ChatItem.FlightCardItem) {
+                FlightCardView v = new FlightCardView(container.getContext());
+                v.bind(FlightCardData.fromJson(((ChatItem.FlightCardItem) item).json));
+                container.addView(v);
+            } else if (item instanceof ChatItem.WeatherCardItem) {
+                WeatherCardView v = new WeatherCardView(container.getContext());
+                v.bind(WeatherCardData.fromJson(((ChatItem.WeatherCardItem) item).json));
+                container.addView(v);
             }
         }
     }
