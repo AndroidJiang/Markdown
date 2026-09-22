@@ -51,6 +51,10 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         final long entryId;
         final AnswerCardAdapter adapter;
         List<ChatItem> items = new ArrayList<>();
+        /** 数据源一次性解析出的全部 item（显示前全量就绪，与打字机解耦） */
+        List<ChatItem> pendingItems = new ArrayList<>();
+        /** 下一个待放行显示的 item 下标 */
+        int showIndex = 0;
         AnswerEntry(long entryId, AnswerCardAdapter adapter) { this.entryId = entryId; this.adapter = adapter; }
         @Override public long getEntryId() { return entryId; }
     }
@@ -128,73 +132,87 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     /**
-     * 添加 AI 回复（直接同步管理 rows，逐段流式渲染）。
+     * 添加 AI 回复。
+     * <p>
+     * 数据源与显示节奏解耦：
+     * - 数据源：全文一次性解析并构建全部 pendingItems（与打字机无关，数据即刻全部就绪）；
+     * - 显示节奏：从 pendingItems 逐个放行——文本段打字机打完（onPrintStop）才放行下一个，
+     *   卡片段放行后立即放行下一个，保持"文本打完 → 卡片出现 → 下一段继续打字机"的效果。
      */
     public void addAIResponse(String fullResponse) {
         AnswerCardAdapter answerAdapter = new AnswerCardAdapter(callback);
-        final int[] segIdx = {0};
 
         // 高度变化 → 外层 RV 滚动
         answerAdapter.setOnHeightChangedListener(() -> {
             if (chatRV != null) chatRV.requestScrollToBottom();
         });
 
-        // 流式完成 → 推进下一段
-        final AnswerEntry entry = new AnswerEntry(nextEntryId++, answerAdapter);
-        answerAdapter.setOnStreamCompleteListener(() -> {
-            streamNextSegment(entry, fullResponse, segIdx);
-        });
-
+        AnswerEntry entry = new AnswerEntry(nextEntryId++, answerAdapter);
+        // 文本段打字机打完 → 放行显示下一个 item
+        answerAdapter.setOnShowNextListener(() -> releaseNext(entry));
         entries.add(entry);
 
-        // 开始逐段添加
-        streamNextSegment(entry, fullResponse, segIdx);
+        // ===== 数据源：一次性全量解析，与打字机完全解耦 =====
+        List<ChatMessage.Segment> segments = ChatMessage.parseSegments(fullResponse);
+        for (int i = 0; i < segments.size(); i++) {
+            ChatMessage.Segment seg = segments.get(i);
+            String itemId = "seg_" + i;
+            if (seg.type == ChatMessage.Segment.TYPE_TEXT) {
+                if (seg.content == null || seg.content.isEmpty()) continue;
+                entry.pendingItems.add(new ChatItem.TextItem(itemId, seg.content, true));
+            } else {
+                ChatItem cardItem;
+                switch (seg.type) {
+                    case ChatMessage.Segment.TYPE_HOTEL_CARD:
+                        cardItem = new ChatItem.HotelCardItem(itemId, seg.content);
+                        break;
+                    case ChatMessage.Segment.TYPE_TRAIN_CARD:
+                        cardItem = new ChatItem.TrainCardItem(itemId, seg.content);
+                        break;
+                    case ChatMessage.Segment.TYPE_FLIGHT_CARD:
+                        cardItem = new ChatItem.FlightCardItem(itemId, seg.content);
+                        break;
+                    case ChatMessage.Segment.TYPE_WEATHER_CARD:
+                        cardItem = new ChatItem.WeatherCardItem(itemId, seg.content);
+                        break;
+                    default:
+                        cardItem = new ChatItem.TextItem(itemId, seg.content, true);
+                        break;
+                }
+                entry.pendingItems.add(cardItem);
+            }
+        }
+
+        // ===== 显示节奏：从数据源逐个放行 =====
+        releaseNext(entry);
     }
 
     /**
-     * 逐段直接添加 row 到 rows 列表（同步，不经过异步 submitList）。
+     * 放行显示下一个 item（数据源全量就绪，此处只控制显示时序）：
+     * - 文本段放行后暂停，等打字机自然打完（onPrintStop → setOnShowNextListener）再放行下一个；
+     * - 卡片段放行后立即放行下一个。
      */
-    private void streamNextSegment(AnswerEntry entry, String fullResponse, int[] segIdx) {
-        List<ChatMessage.Segment> segments = ChatMessage.parseSegments(fullResponse);
-        if (segIdx[0] >= segments.size()) return;
+    private void releaseNext(AnswerEntry entry) {
+        if (entry == null || entry.showIndex >= entry.pendingItems.size()) return;
 
-        ChatMessage.Segment seg = segments.get(segIdx[0]);
-        String itemId = "seg_" + segIdx[0];
-
-        if (seg.type == ChatMessage.Segment.TYPE_TEXT) {
-            if (seg.content == null || seg.content.isEmpty()) {
-                segIdx[0]++;
-                streamNextSegment(entry, fullResponse, segIdx);
+        ChatItem item = entry.pendingItems.get(entry.showIndex);
+        if (item instanceof ChatItem.TextItem) {
+            ChatItem.TextItem textItem = (ChatItem.TextItem) item;
+            if (textItem.text == null || textItem.text.isEmpty()) {
+                entry.showIndex++;
+                releaseNext(entry);
                 return;
             }
-            ChatItem.TextItem textItem = new ChatItem.TextItem(itemId, seg.content, true);
-            addAnswerRow(entry, textItem);
-            segIdx[0]++;
-            // 等 onPrintStop → onStreamComplete → 再调 streamNextSegment
+        }
+
+        addAnswerRow(entry, item);
+        entry.showIndex++;
+
+        if (item instanceof ChatItem.TextItem && ((ChatItem.TextItem) item).isStreaming) {
+            // 文本段：等打字机完成再放行下一个
         } else {
-            ChatItem cardItem;
-            switch (seg.type) {
-                case ChatMessage.Segment.TYPE_HOTEL_CARD:
-                    cardItem = new ChatItem.HotelCardItem(itemId, seg.content);
-                    break;
-                case ChatMessage.Segment.TYPE_TRAIN_CARD:
-                    cardItem = new ChatItem.TrainCardItem(itemId, seg.content);
-                    break;
-                case ChatMessage.Segment.TYPE_FLIGHT_CARD:
-                    cardItem = new ChatItem.FlightCardItem(itemId, seg.content);
-                    break;
-                case ChatMessage.Segment.TYPE_WEATHER_CARD:
-                    cardItem = new ChatItem.WeatherCardItem(itemId, seg.content);
-                    break;
-                default:
-                    cardItem = new ChatItem.TextItem(itemId, seg.content, true);
-                    break;
-            }
-            addAnswerRow(entry, cardItem);
-            segIdx[0]++;
-            // 卡片不需要流式，post 后继续下一段
-            new android.os.Handler(android.os.Looper.getMainLooper()).post(
-                    () -> streamNextSegment(entry, fullResponse, segIdx));
+            // 卡片等非流式 item：立即放行下一个
+            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> releaseNext(entry));
         }
     }
 
@@ -366,13 +384,15 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     tv.setPrintingEventListener(new PrinterMarkDownTextView.PrintingEventListener() {
                         @Override public void onPrintStart() {}
                         @Override public void onPrintStop(boolean printAll) {
+                            // 非自然完成（holder 复用被 stopPrinting）不算该段打完
+                            if (textItem.printData != null && textItem.printData.isStopByUser) return;
                             textItem.isStreaming = false;
                             // 保存 showingText 供复用时 restore
                             if (textItem.printData != null && textItem.printData.parsedMarkdownText != null) {
                                 textItem.printData.showingText = textItem.printData.parsedMarkdownText;
                             }
-                            // 通知 AnswerCardAdapter 推进下一段
-                            row.adapter.notifyStreamComplete();
+                            // 文本段显示完成 → 放行下一个 item（数据源已全量就绪，仅控制显示时序）
+                            row.adapter.notifyShowNext();
                             row.adapter.notifyTextContentHeightChanged();
                         }
                         @Override public void onPrintPaused(int index) {}

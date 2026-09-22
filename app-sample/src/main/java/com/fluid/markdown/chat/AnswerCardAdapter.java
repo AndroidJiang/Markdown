@@ -24,7 +24,7 @@ import java.util.function.Function;
  * 继承 ListAdapter，内部管理多种 ChatItem。
  * 外层 ChatAdapter 订阅它的 item 列表变化，扁平化展开到外层 RV。
  * <p>
- * 流式串联：文本 item 打印完成后 onPrintStop → onStreamComplete → 推进下一段。
+ * 数据驱动（参考 egame）：数据源一次性注入全部 item，各文本段独立打字机渲染，互不等待。
  */
 public class AnswerCardAdapter extends ListAdapter<ChatItem, RecyclerView.ViewHolder> {
 
@@ -36,15 +36,16 @@ public class AnswerCardAdapter extends ListAdapter<ChatItem, RecyclerView.ViewHo
 
     private final ElementClickEventCallback callback;
     private final List<Function<List<ChatItem>, Void>> itemsChangedObservers = new ArrayList<>();
-    private OnStreamCompleteListener streamCompleteListener;
+    private OnShowNextListener showNextListener;
     private OnHeightChangedListener heightListener;
 
     public interface OnHeightChangedListener {
         void onHeightChanged();
     }
 
-    public interface OnStreamCompleteListener {
-        void onStreamComplete();
+    /** 当前文本段打字机自然打完，可放行显示下一个 item。 */
+    public interface OnShowNextListener {
+        void onShowNext();
     }
 
     public AnswerCardAdapter(ElementClickEventCallback callback) {
@@ -76,20 +77,21 @@ public class AnswerCardAdapter extends ListAdapter<ChatItem, RecyclerView.ViewHo
     }
 
     /**
-     * 通知流式打印完成（由外层 ChatAdapter.AnswerVH 调用）。
+     * 当前文本段显示完成（由外层 ChatAdapter.AnswerVH 在打字机自然打完后调用），
+     * 放行显示下一个 item。
      */
-    public void notifyStreamComplete() {
-        if (streamCompleteListener != null) {
-            streamCompleteListener.onStreamComplete();
+    public void notifyShowNext() {
+        if (showNextListener != null) {
+            showNextListener.onShowNext();
         }
+    }
+
+    public void setOnShowNextListener(OnShowNextListener listener) {
+        this.showNextListener = listener;
     }
 
     public void setOnHeightChangedListener(OnHeightChangedListener listener) {
         this.heightListener = listener;
-    }
-
-    public void setOnStreamCompleteListener(OnStreamCompleteListener listener) {
-        this.streamCompleteListener = listener;
     }
 
     public void addItemsChangedObserver(Function<List<ChatItem>, Void> observer) {
@@ -204,9 +206,6 @@ public class AnswerCardAdapter extends ListAdapter<ChatItem, RecyclerView.ViewHo
                 @Override public void onPrintStart() {}
                 @Override public void onPrintStop(boolean printAll) {
                     item.isStreaming = false;
-                    if (adapter.streamCompleteListener != null) {
-                        adapter.streamCompleteListener.onStreamComplete();
-                    }
                     if (adapter.heightListener != null) adapter.heightListener.onHeightChanged();
                 }
                 @Override public void onPrintPaused(int index) {}
