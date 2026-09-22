@@ -19,6 +19,7 @@ import com.fluid.afm.markdown.model.EventModel
 import com.fluid.afm.markdown.widget.PrinterMarkDownTextView
 import com.fluid.afm.styles.MarkdownStyles
 import com.fluid.afm.styles.TitleStyle
+import com.fluid.markdown.chat.ChatActivity
 import com.fluid.markdown.demos.ListActivity
 import com.fluid.markdown.demos.PrinterActivity
 
@@ -51,7 +52,8 @@ class MainActivity : AppCompatActivity() {
             TagItem(R.string.tag_html, R.string.sample_html),
             TagItem(R.string.tag_hr, R.string.sample_hr),
             TagItem(R.string.tag_weather, R.string.sample_weather),
-            TagItem(R.string.tag_printer, 0)
+            TagItem(R.string.tag_printer, 0),
+            TagItem(R.string.tag_ai_chat, -1)
         )
     }
 
@@ -156,6 +158,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         val item = tagItems[index]
+        if (item.contentResId == -1) {
+            startActivity(Intent(this, ChatActivity::class.java))
+            selectTag(0)
+            return
+        }
         if (item.contentResId == 0) {
             startActivity(Intent(this, PrinterActivity::class.java))
             selectTag(0)

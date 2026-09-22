@@ -54,5 +54,6 @@
     <string name="tag_hr">Horizontal Rule</string>
     <string name="tag_weather">Weather</string>
     <string name="tag_printer">Printer</string>
+    <string name="tag_ai_chat">AI 对话</string>
 
 </resources>

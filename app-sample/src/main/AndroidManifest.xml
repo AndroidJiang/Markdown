@@ -13,6 +13,11 @@
         android:theme="@style/Theme.AntFluidMarkdown"
         tools:targetApi="31">
         <activity
+            android:name="com.fluid.markdown.chat.ChatActivity"
+            android:exported="false"
+            android:label="AI 对话"
+            android:theme="@style/Theme.AntFluidMarkdown" />
+        <activity
             android:name="com.fluid.markdown.demos.ListActivity"
             android:exported="false" />
         <activity
