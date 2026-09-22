@@ -27,13 +27,13 @@
             android:textSize="12sp" />
     </LinearLayout>
 
-    <!-- 内容容器：文本段 + 卡片交替添加 -->
-    <LinearLayout
-        android:id="@+id/content_container"
+    <!-- 内层 RecyclerView：文本/酒店/火车/机票/天气卡片 -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/inner_rv"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
         android:background="@drawable/chat_ai_bubble"
-        android:padding="12dp" />
+        android:padding="12dp"
+        android:nestedScrollingEnabled="false" />
 
 </LinearLayout>

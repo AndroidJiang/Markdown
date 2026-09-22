@@ -5,23 +5,18 @@ import android.os.Handler;
 import android.os.Looper;
 import android.text.Editable;
 import android.text.TextWatcher;
-import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.EditText;
-import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
-import androidx.recyclerview.widget.RecyclerView;
 
 import com.fluid.afm.AFMInitializer;
 import com.fluid.afm.ContextHolder;
-import com.fluid.afm.R;
 import com.fluid.afm.markdown.ElementClickEventCallback;
-import com.fluid.afm.markdown.model.EventModel;
 import com.fluid.afm.markdown.html.SpanTextClickableSpan;
+import com.fluid.afm.markdown.model.EventModel;
 
 import java.util.List;
 import java.util.Map;
@@ -29,12 +24,11 @@ import java.util.Map;
 /**
  * AI 对话页（模拟千问聊天主界面）。
  * <p>
- * 核心功能：
- * 1. RecyclerView 列表展示对话消息
- * 2. 用户输入消息后，模拟 AI 流式回复
- * 3. 流式 Markdown 渲染（基于 PrinterMarkDownTextView）
- * 4. 卡片嵌入在消息流中（酒店卡片）
- * 5. 自动滚动到底部 + 遇到卡片暂停滚动
+ * 架构（参考 egame_cloud_phone）：
+ * - 外层 ChatRecyclerView：用户消息 + AI 回答行
+ * - 每个 AI 回答行内部有一个内层 RecyclerView + AnswerCardAdapter
+ * - AnswerCardAdapter 管理多种卡片类型（文本/酒店/火车/机票/天气）
+ * - 流式串联：文本段打印完成后自动添加下一段
  */
 public class ChatActivity extends AppCompatActivity {
 
@@ -49,40 +43,25 @@ public class ChatActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(getLayoutId("activity_chat"));
 
-        // 确保 AFM 初始化
         if (ContextHolder.getContext() == null) {
             AFMInitializer.init(this, null, null, null);
         }
 
         initViews();
         initRecyclerView();
-
-        // 首次进入发送一条模拟消息
         handler.postDelayed(this::sendInitialMessage, 300);
     }
 
     private void initViews() {
-        int rvId = getResourceId("chat_recycler_view");
-        int inputId =getResourceId("et_input");
-        int sendId = getResourceId("btn_send");
-        int backId = getResourceId("chat_back");
-
-        recyclerView = findViewById(rvId);
-        inputEdit = findViewById(inputId);
-        sendButton = findViewById(sendId);
-
-        findViewById(backId).setOnClickListener(v -> finish());
-
+        recyclerView = findViewById(getResourceId("chat_recycler_view"));
+        inputEdit = findViewById(getResourceId("et_input"));
+        sendButton = findViewById(getResourceId("btn_send"));
+        findViewById(getResourceId("chat_back")).setOnClickListener(v -> finish());
         sendButton.setOnClickListener(v -> handleSend());
-
-        // 输入框有内容时按钮高亮
         inputEdit.addTextChangedListener(new TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
-            @Override
-            public void onTextChanged(CharSequence s, int start, int before, int count) {}
-            @Override
-            public void afterTextChanged(Editable s) {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override public void afterTextChanged(Editable s) {
                 sendButton.setEnabled(s.length() > 0);
                 sendButton.setAlpha(s.length() > 0 ? 1.0f : 0.4f);
             }
@@ -95,59 +74,69 @@ public class ChatActivity extends AppCompatActivity {
         recyclerView.setLayoutManager(lm);
 
         adapter = new ChatAdapter(new ElementClickEventCallback() {
-            @Override
-            public boolean onLinkClicked(Map<String, Object> params) {
-                return false;
-            }
-            @Override
-            public void onFootnoteClicked(String index) {}
-            @Override
-            public void onImageClicked(String url, String description) {}
-            @Override
-            public boolean onTextClickableSpanClicked(View widget, String link, String entityID,
-                                                       SpanTextClickableSpan.ClickableTextType type) {
-                return false;
-            }
-            @Override
-            public void exposureSpmBehavior(List<EventModel> models) {}
+            @Override public boolean onLinkClicked(Map<String, Object> params) { return false; }
+            @Override public void onFootnoteClicked(String index) {}
+            @Override public void onImageClicked(String url, String description) {}
+            @Override public boolean onTextClickableSpanClicked(View widget, String link, String entityID,
+                                                               SpanTextClickableSpan.ClickableTextType type) { return false; }
+            @Override public void exposureSpmBehavior(List<EventModel> models) {}
         });
+
+        // AI 回答内部高度变化时，触发外层自动滚动
+        adapter.setOnAIHeightChangedListener(() -> recyclerView.requestScrollToBottom());
+
         recyclerView.setAdapter(adapter);
     }
 
     private void sendInitialMessage() {
-        // 添加一条 AI 欢迎消息
-        ChatMessage welcome = new ChatMessage(ChatMessage.TYPE_AI,
-                "您好！我是 AI 助手，可以帮您推荐酒店。\n\n" +
-                "请在下方输入您的问题，例如：**帮我推荐明天酒店**");
-        welcome.isStreaming = true;
-        adapter.addMessage(welcome);
-        recyclerView.forceScrollToBottom();
+        adapter.addUserMessage("帮我规划明天杭州出行");
+        handler.postDelayed(() -> {
+            String response = MockSSESource.buildTravelPlan();
+            adapter.addAIResponse(response);
+            recyclerView.forceScrollToBottom();
+        }, 500);
     }
 
     private void handleSend() {
         String text = inputEdit.getText().toString().trim();
         if (text.isEmpty()) return;
 
-        // 添加用户消息
-        adapter.addMessage(new ChatMessage(ChatMessage.TYPE_USER, text));
+        adapter.addUserMessage(text);
         inputEdit.setText("");
 
-        // 模拟 AI 回复（延迟 500ms 模拟网络）
         handler.postDelayed(() -> {
-            // 根据用户输入选择回复内容
-            String response;
-            if (text.contains("酒店") || text.contains("hotel") || text.contains("住宿")) {
-                response = MockSSESource.buildHotelRecommendation();
-            } else {
-                response = MockSSESource.buildSimpleText();
-            }
-
-            ChatMessage aiMsg = new ChatMessage(ChatMessage.TYPE_AI, response);
-            aiMsg.isStreaming = true;
-            adapter.addMessage(aiMsg);
+            String response = selectResponse(text);
+            adapter.addAIResponse(response);
             recyclerView.forceScrollToBottom();
-            // 卡片暂停滚动逻辑已移到 ChatViewHolder.startStreaming() 内部
         }, 500);
+    }
+
+    private String selectResponse(String text) {
+        String lower = text.toLowerCase();
+        if (containsAny(text, "出行", "旅游", "旅行", "行程", "规划")) {
+            return MockSSESource.buildTravelPlan();
+        }
+        if (containsAny(text, "酒店", "hotel", "住宿", "宾馆")) {
+            return MockSSESource.buildHotelRecommendation();
+        }
+        if (containsAny(text, "火车", "高铁", "train", "动车", "车票")) {
+            return MockSSESource.buildTrainRecommendation();
+        }
+        if (containsAny(text, "飞机", "机票", "flight", "航班", "航空")) {
+            return MockSSESource.buildFlightRecommendation();
+        }
+        if (containsAny(text, "天气", "weather", "气温")) {
+            return MockSSESource.buildWeatherRecommendation();
+        }
+        return MockSSESource.buildSimpleText();
+    }
+
+    private boolean containsAny(String text, String... keywords) {
+        String lower = text.toLowerCase();
+        for (String kw : keywords) {
+            if (lower.contains(kw.toLowerCase())) return true;
+        }
+        return false;
     }
 
     @Override

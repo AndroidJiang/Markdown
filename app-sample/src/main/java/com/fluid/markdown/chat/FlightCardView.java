@@ -1,0 +1,66 @@
+package com.fluid.markdown.chat;
+
+import android.content.Context;
+import android.graphics.drawable.GradientDrawable;
+import android.util.AttributeSet;
+import android.view.LayoutInflater;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+
+import androidx.annotation.Nullable;
+
+/**
+ * 机票卡片视图。
+ */
+public class FlightCardView extends LinearLayout {
+
+    public FlightCardView(Context context) {
+        super(context);
+        init();
+    }
+
+    public FlightCardView(Context context, @Nullable AttributeSet attrs) {
+        super(context, attrs);
+        init();
+    }
+
+    private void init() {
+        setOrientation(VERTICAL);
+        setPadding(dp(16), dp(14), dp(16), dp(14));
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xFFFFFFFF);
+        bg.setCornerRadius(dp(12));
+        bg.setStroke(1, 0xFFE8E8E8);
+        setBackground(bg);
+
+        LayoutInflater.from(getContext()).inflate(
+                getResources().getIdentifier("view_flight_card", "layout",
+                        getContext().getPackageName()), this, true);
+    }
+
+    public void bind(FlightCardData data) {
+        setText(R_id("tv_flight_no"), data.flightNo);
+        setText(R_id("tv_airline"), data.airline);
+        setText(R_id("tv_flight_from"), data.from);
+        setText(R_id("tv_flight_to"), data.to);
+        setText(R_id("tv_flight_depart"), data.departTime);
+        setText(R_id("tv_flight_arrive"), data.arriveTime);
+        setText(R_id("tv_flight_duration"), data.duration);
+        setText(R_id("tv_flight_price"), data.price);
+        setText(R_id("tv_flight_cabin"), data.cabin);
+    }
+
+    private void setText(int resId, String text) {
+        TextView tv = findViewById(resId);
+        if (tv != null && text != null) tv.setText(text);
+    }
+
+    private int R_id(String name) {
+        return getResources().getIdentifier(name, "id", getContext().getPackageName());
+    }
+
+    private int dp(float v) {
+        return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
+    }
+}
