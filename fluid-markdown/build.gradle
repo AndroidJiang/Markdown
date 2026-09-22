@@ -28,6 +28,7 @@ android {
 dependencies {
 
     implementation libs.androidx.appcompat
+    implementation libs.androidx.constraintlayout
     api project(':markwon-core')
     api project(':markwon-ext-latex')
     api project(':markwon-ext-strikethrough')

@@ -21,6 +21,7 @@ import com.fluid.afm.markdown.iconlink.IconLinkSpanHandler;
 import com.fluid.afm.markdown.list.DefinitionListPlugin;
 import com.fluid.afm.markdown.span.LinkClickSpan;
 import com.fluid.afm.markdown.text.AfmTextPlugin;
+import com.fluid.afm.markdown.weather.WeatherPlugin;
 import com.fluid.afm.markdown.widget.PrinterMarkDownTextView;
 import com.fluid.afm.network.ImageLoaderSchemeHandler;
 import com.fluid.afm.styles.MarkdownStyles;
@@ -90,6 +91,7 @@ public class MarkdownParserFactory {
         plugins.add(createTaskListPlugin(context));
         plugins.add(definitationPlugin());
         plugins.add(TablePlugin.create(context));
+        plugins.add(WeatherPlugin.create());
         return plugins;
     }
 

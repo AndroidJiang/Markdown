@@ -50,6 +50,7 @@ class MainActivity : AppCompatActivity() {
             TagItem(R.string.tag_footnote, R.string.sample_footnote),
             TagItem(R.string.tag_html, R.string.sample_html),
             TagItem(R.string.tag_hr, R.string.sample_hr),
+            TagItem(R.string.tag_weather, R.string.sample_weather),
             TagItem(R.string.tag_printer, 0)
         )
     }
@@ -171,7 +172,21 @@ class MainActivity : AppCompatActivity() {
             resources.getString(item.contentResId)
         }
 
-        markdownTextView.setMarkdownText(markdown)
+        if (markdownTextView.isStarted) {
+            markdownTextView.stopPrinting("")
+        }
+
+        val isWeatherTab = item.labelResId == R.string.tag_weather
+        if (isWeatherTab) {
+            markdownTextView.setSizeChangedListener { _, _ ->
+                scrollView.post { scrollView.fullScroll(View.FOCUS_DOWN) }
+            }
+            markdownTextView.setMarkdownText("")
+            markdownTextView.startPrinting(markdown)
+        } else {
+            markdownTextView.setSizeChangedListener(null)
+            markdownTextView.setMarkdownText(markdown)
+        }
     }
 
     private fun dpToPx(dp: Float): Float {

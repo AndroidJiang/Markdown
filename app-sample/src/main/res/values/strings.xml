@@ -35,6 +35,8 @@
 
     <string name="sample_hr"><![CDATA[### Horizontal Rules\nContent above the line\n\n---\n\nContent between lines\n\n***\n\nContent below the line]]></string>
 
+    <string name="sample_weather"><![CDATA[## 今日天气\n\n以下是主要城市的实时天气信息：\n\n### 单卡片（JSON Object）\n\n```weather\n{\"city\":\"北京\",\"temp\":\"26\",\"condition\":\"晴\",\"wind\":\"西北风 3级\",\"humidity\":\"42%\"}\n```\n\n普通文本内容可以和天气卡片**混排**，支持所有 Markdown 语法。\n\n### 多卡片（JSON Array）\n\n```weather\n[{\"city\":\"上海\",\"temp\":\"22\",\"condition\":\"多云\",\"wind\":\"东南风 2级\",\"humidity\":\"68%\"},{\"city\":\"深圳\",\"temp\":\"30\",\"condition\":\"雷阵雨\",\"wind\":\"南风 4级\",\"humidity\":\"85%\"},{\"city\":\"哈尔滨\",\"temp\":\"-5\",\"condition\":\"小雪\",\"wind\":\"北风 5级\",\"humidity\":\"78%\"},{\"city\":\"成都\",\"temp\":\"18\",\"condition\":\"阴\",\"wind\":\"微风\",\"humidity\":\"72%\"}]\n```\n\n---\n\n> **提示**: 天气数据通过 ` ```weather ` JSON 代码块协议下发，端上自动解析渲染。\n\n天气卡片支持以下天气类型的**自动主题配色**：\n- **晴天** — 暖橙渐变\n- **多云/阴天** — 灰蓝渐变\n- **雨天** — 蓝色渐变\n- **雪天** — 冰蓝渐变\n- **雷电** — 紫蓝渐变\n- **雾/霾** — 灰色渐变]]></string>
+
     <string name="stopped">(stopped)</string>
     <string name="list">List</string>
     <string name="add">add item</string>
@@ -50,6 +52,7 @@
     <string name="tag_footnote">Footnote</string>
     <string name="tag_html">HTML</string>
     <string name="tag_hr">Horizontal Rule</string>
+    <string name="tag_weather">Weather</string>
     <string name="tag_printer">Printer</string>
 
 </resources>
