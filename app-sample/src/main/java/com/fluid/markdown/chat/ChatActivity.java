@@ -78,6 +78,10 @@ public class ChatActivity extends AppCompatActivity {
         lm.setStackFromEnd(true);
         recyclerView.setLayoutManager(lm);
 
+        // 流式场景禁用 item 动画：item 插入/更新（打字机段落推进）直接呈现，
+        // 避免 DefaultItemAnimator 的淡入/位移动画与打字机滚动叠加造成视觉干扰
+        recyclerView.setItemAnimator(null);
+
         adapter = new ChatAdapter(new ElementClickEventCallback() {
             @Override public boolean onLinkClicked(Map<String, Object> params) { return false; }
             @Override public void onFootnoteClicked(String index) {}
@@ -117,7 +121,12 @@ public class ChatActivity extends AppCompatActivity {
         inputEdit.setText("");
 
         handler.postDelayed(() -> {
-            adapter.addAIResponse(selectResponse(text));
+            if (containsAny(text, "行程规划", "规划行程", "一日游", "1日游", "一日行程")) {
+                // 行程规划：mock 真实 WebSocket 下发时间轴（数据分批到达，显示由闸门控节奏）
+                MockSSESource.streamItineraryPlan(adapter, handler);
+            } else {
+                adapter.addAIResponse(selectResponse(text));
+            }
             recyclerView.forceScrollToBottom();
         }, 500);
     }

@@ -55,8 +55,18 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         List<ChatItem> pendingItems = new ArrayList<>();
         /** 下一个待放行显示的 item 下标 */
         int showIndex = 0;
+        /** 打字机等待中：流式文本段放行后置位、自然打完复位；期间新数据只入列不放行 */
+        boolean waitingTypewriter;
         AnswerEntry(long entryId, AnswerCardAdapter adapter) { this.entryId = entryId; this.adapter = adapter; }
         @Override public long getEntryId() { return entryId; }
+    }
+
+    /** 流式回答句柄：配合 beginStream / appendStreamText / appendStreamCard 按真实时间轴注入数据。 */
+    public static class StreamHandle {
+        final AnswerEntry entry;
+        /** 当前正在增长的文本段（卡片之后的新文本 delta 会开新段） */
+        ChatItem.TextItem currentText;
+        StreamHandle(AnswerEntry entry) { this.entry = entry; }
     }
 
     private static class LoadingEntry implements Entry {
@@ -101,6 +111,7 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
     private final List<Entry> entries = new ArrayList<>();
     private final List<Row> rows = new ArrayList<>();
+    private final android.os.Handler mainHandler = new android.os.Handler(android.os.Looper.getMainLooper());
     private long nextEntryId = 0;
     private final ElementClickEventCallback callback;
     private ChatRecyclerView chatRV;
@@ -140,17 +151,7 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
      *   卡片段放行后立即放行下一个，保持"文本打完 → 卡片出现 → 下一段继续打字机"的效果。
      */
     public void addAIResponse(String fullResponse) {
-        AnswerCardAdapter answerAdapter = new AnswerCardAdapter(callback);
-
-        // 高度变化 → 外层 RV 滚动
-        answerAdapter.setOnHeightChangedListener(() -> {
-            if (chatRV != null) chatRV.requestScrollToBottom();
-        });
-
-        AnswerEntry entry = new AnswerEntry(nextEntryId++, answerAdapter);
-        // 文本段打字机打完 → 放行显示下一个 item
-        answerAdapter.setOnShowNextListener(() -> releaseNext(entry));
-        entries.add(entry);
+        AnswerEntry entry = createAnswerEntry();
 
         // ===== 数据源：一次性全量解析，与打字机完全解耦 =====
         List<ChatMessage.Segment> segments = ChatMessage.parseSegments(fullResponse);
@@ -188,12 +189,108 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     /**
+     * 创建回答 Entry（addAIResponse 全量路径与 beginStream 流式路径共用）：
+     * - 高度变化 → 外层 RV 滚动；
+     * - 文本段打字机自然打完 → 解除等待、放行下一个 item。
+     * <p>
+     * 推进必须 post：onPrintStop 可能发生在 payload 增量绑定的同步调用栈中
+     * （appendPrinting 恰好打完），此时直接 notifyItemInserted 会抛
+     * "Cannot call this method while RecyclerView is computing a layout"。
+     */
+    private AnswerEntry createAnswerEntry() {
+        AnswerCardAdapter answerAdapter = new AnswerCardAdapter(callback);
+        answerAdapter.setOnHeightChangedListener(() -> {
+            if (chatRV != null) chatRV.requestScrollToBottom();
+        });
+        AnswerEntry entry = new AnswerEntry(nextEntryId++, answerAdapter);
+        answerAdapter.setOnShowNextListener(() -> {
+            entry.waitingTypewriter = false;
+            mainHandler.post(() -> releaseNext(entry));
+        });
+        entries.add(entry);
+        return entry;
+    }
+
+    // ======== 流式回答 API（mock 真实 SSE/WebSocket 下发时间轴） ========
+
+    /**
+     * 开始一段流式回答：数据通过 appendStreamText / appendStreamCard 按真实节奏分批到达，
+     * 显示时机仍由闸门控制（流式文本段打完才放行下一个 item）。
+     */
+    public StreamHandle beginStream() {
+        return new StreamHandle(createAnswerEntry());
+    }
+
+    /**
+     * 追加一段文本 delta：
+     * - 当前无增长中的文本段：新建 TextItem 入列并尝试放行显示；
+     * - 已有：追加到该段，若该段已放行显示则 payload 增量刷新（打字机续打），未放行仅更新数据。
+     */
+    public void appendStreamText(StreamHandle handle, String delta) {
+        if (handle == null || delta == null || delta.isEmpty()) return;
+        AnswerEntry entry = handle.entry;
+        if (handle.currentText == null) {
+            ChatItem.TextItem textItem = new ChatItem.TextItem(
+                    "seg_" + entry.pendingItems.size(), delta, true);
+            entry.pendingItems.add(textItem);
+            handle.currentText = textItem;
+        } else {
+            handle.currentText.text += delta;
+            notifyTextItemChanged(entry, handle.currentText);
+        }
+        releaseNext(entry);
+    }
+
+    /**
+     * 追加一张卡片：数据到达即入列，显示时机由闸门决定。
+     * 卡片之后到达的文本 delta 会开启新的文本段。
+     */
+    public void appendStreamCard(StreamHandle handle, ChatItem cardItem) {
+        if (handle == null || cardItem == null) return;
+        AnswerEntry entry = handle.entry;
+        entry.pendingItems.add(cardItem);
+        handle.currentText = null;
+        releaseNext(entry);
+    }
+
+    /**
+     * 结束当前增长的文本段（下次 appendStreamText 会新建独立文本段）。
+     * <p>
+     * 用于流式数据源按"完整段落块"注入的场景：每块都是完整 markdown 结构，
+     * 每个文本段用 startPrinting 一次性渲染，规避 appendPrinting 全量重解析
+     * 在结构闭合瞬间产生的高度突变。
+     */
+    public void endStreamText(StreamHandle handle) {
+        if (handle == null) return;
+        handle.currentText = null;
+    }
+
+    /** 结束流式回答（demo 无底部点赞栏，预留收尾扩展点）。 */
+    public void endStream(StreamHandle handle) {
+        // 预留：正式项目在此放行 BottomLike 等收尾 item
+    }
+
+    /** 已放行显示的文本段数据变化 → payload 增量刷新；未放行的无需刷新。 */
+    private void notifyTextItemChanged(AnswerEntry entry, ChatItem.TextItem textItem) {
+        int local = entry.items.indexOf(textItem);
+        if (local < 0) return;
+        int entryIndex = entries.indexOf(entry);
+        if (entryIndex < 0) return;
+        int pos = entryStartPosition(entryIndex) + local;
+        if (pos >= 0 && pos < rows.size()) {
+            notifyItemChanged(pos, "PAYLOAD_TEXT_UPDATE");
+        }
+    }
+
+    /**
      * 放行显示下一个 item（数据源全量就绪，此处只控制显示时序）：
      * - 文本段放行后暂停，等打字机自然打完（onPrintStop → setOnShowNextListener）再放行下一个；
      * - 卡片段放行后立即放行下一个。
      */
     private void releaseNext(AnswerEntry entry) {
         if (entry == null || entry.showIndex >= entry.pendingItems.size()) return;
+        // 打字机等待中：流式数据到达只入列，不提前放行（保持"文本打完→卡片出现"）
+        if (entry.waitingTypewriter) return;
 
         ChatItem item = entry.pendingItems.get(entry.showIndex);
         if (item instanceof ChatItem.TextItem) {
@@ -209,10 +306,11 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         entry.showIndex++;
 
         if (item instanceof ChatItem.TextItem && ((ChatItem.TextItem) item).isStreaming) {
-            // 文本段：等打字机完成再放行下一个
+            // 流式文本段：进入等待，等打字机自然打完（onPrintStop → notifyShowNext）再放行下一个
+            entry.waitingTypewriter = true;
         } else {
             // 卡片等非流式 item：立即放行下一个
-            new android.os.Handler(android.os.Looper.getMainLooper()).post(() -> releaseNext(entry));
+            mainHandler.post(() -> releaseNext(entry));
         }
     }
 
@@ -297,6 +395,23 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
     }
 
+    /** payload 增量绑定：流式文本段 delta 续打，其余兜底全量 bind。 */
+    @Override
+    public void onBindViewHolder(@NonNull RecyclerView.ViewHolder holder, int position, @NonNull List<Object> payloads) {
+        if (payloads.isEmpty()) {
+            onBindViewHolder(holder, position);
+            return;
+        }
+        Row row = rows.get(position);
+        if (row instanceof AnswerRow) {
+            AnswerRow ar = (AnswerRow) row;
+            applyAnswerItemSpacing(holder, ar.localPosition, ar.localItemCount);
+            ((AnswerVH) holder).bindIncremental(ar, callback);
+        } else {
+            onBindViewHolder(holder, position);
+        }
+    }
+
     /**
      * 回答 item 间距（参考 egame AnswerItemUiHelper）。
      * 首项显示头像 + topMargin，其余项 topMargin=0 无头像。
@@ -340,6 +455,8 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     static class AnswerVH extends RecyclerView.ViewHolder {
         final View avatarContainer;
         final LinearLayout contentContainer;
+        /** 当前 holder 绑定的文本段（增量续打时校验归属，防止复用串段） */
+        private ChatItem.TextItem boundTextItem;
 
         AnswerVH(@NonNull View itemView) {
             super(itemView);
@@ -352,6 +469,7 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
         void bind(AnswerRow row, ElementClickEventCallback callback) {
             ChatItem item = row.item;
+            boundTextItem = item instanceof ChatItem.TextItem ? (ChatItem.TextItem) item : null;
 
             contentContainer.removeAllViews();
 
@@ -375,12 +493,14 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     tv.setMarkdownText(textItem.text);
                     tv.post(() -> tv.setMinHeight(0));
                 } else {
-                    // 流式打印
+                    // 流式打印（printData 记录有进度时从上次位置续打，滚动回收复用不重头）
                     if (textItem.printData == null) {
                         textItem.printData = new PrinterMarkDownTextView.MarkDownPrintData();
                     }
                     tv.setPrintData(textItem.printData);
-                    tv.startPrinting(textItem.text);
+                    int resumeIndex = textItem.printData.currentIndex > 0
+                            ? textItem.printData.currentIndex : 0;
+                    tv.startPrinting(textItem.text, resumeIndex);
                     tv.setPrintingEventListener(new PrinterMarkDownTextView.PrintingEventListener() {
                         @Override public void onPrintStart() {}
                         @Override public void onPrintStop(boolean printAll) {
@@ -429,6 +549,28 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                     contentContainer.addView(v);
                 }
             }
+        }
+
+        /**
+         * payload 增量绑定：同一流式文本段的新 delta 从当前打印进度续打（replace 全文模式），
+         * 其余情况兜底全量 bind。
+         * 打字机曾"暂时追平"（isStreaming 被提前置 false）时，delta 到达即恢复流式态自愈；
+         * 真正完成的段不再有数据，不会被触发。
+         */
+        void bindIncremental(AnswerRow row, ElementClickEventCallback callback) {
+            ChatItem item = row.item;
+            if (boundTextItem == item && item instanceof ChatItem.TextItem
+                    && contentContainer.getChildCount() == 1
+                    && contentContainer.getChildAt(0) instanceof PrinterMarkDownTextView) {
+                ChatItem.TextItem textItem = (ChatItem.TextItem) item;
+                PrinterMarkDownTextView tv = (PrinterMarkDownTextView) contentContainer.getChildAt(0);
+                if (tv.isStarted()) {
+                    textItem.isStreaming = true;
+                    tv.appendPrinting(textItem.text, false);
+                    return;
+                }
+            }
+            bind(row, callback);
         }
     }
 

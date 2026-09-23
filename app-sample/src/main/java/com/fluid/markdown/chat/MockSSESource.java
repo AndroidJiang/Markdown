@@ -245,4 +245,90 @@ public class MockSSESource {
                 "---\n\n" +
                 "以上就是流式 Markdown 的渲染效果，文本会逐字显示，体验和千问一致！";
     }
+
+    // ==================== 行程规划（真实时间轴流式 mock） ====================
+
+    /**
+     * 按真实 WebSocket 下发时间轴 mock 行程规划场景：
+     * <pre>
+     * t0       短文本「好的，稍等一下～」
+     * t+800ms  过程卡：正在搜索酒店 / 正在查询天气（真实日志中卡片在 3 秒内全部下发）
+     * t+3000ms 结果卡：酒店结果 / 天气结果
+     * t+3200ms 起正文按"完整段落块"间隔注入（每块都是闭合的 markdown 结构）
+     * </pre>
+     * 展示顺序由 ChatAdapter 闸门控制：短文本打字机打完 → 卡片按序出现 → 正文逐段打字机。
+     * <p>
+     * 正文按"完整段落块"注入而非逐字符/逐小段流式：
+     * 完整块保证每个文本段用 startPrinting 一次性渲染（与全量路径一致、高度单调增长），
+     * 规避 appendPrinting 全量重解析在 markdown 结构闭合瞬间引起的高度突变
+     * （表现为"正文段与上方卡片之间先出现大片留白、随打字推进逐渐缩小"）。
+     */
+    public static void streamItineraryPlan(ChatAdapter adapter, android.os.Handler handler) {
+        ChatAdapter.StreamHandle handle = adapter.beginStream();
+
+        // t0：短文本（真实日志第一条 delta）
+        adapter.appendStreamText(handle, "好的，稍等一下～\n\n");
+
+        // t+800ms：过程卡（数据到达即入列，显示由闸门决定）
+        handler.postDelayed(() -> {
+            adapter.appendStreamCard(handle, new ChatItem.HotelCardItem("card_search_hotel",
+                    "{\"name\":\"🏨 正在为您搜索酒店资源\",\"price\":\"搜索中...\",\"rating\":4.0," +
+                    "\"location\":\"北京 · 王府井/前门商圈\",\"tags\":[\"正在检索\",\"预计3秒\"]}"));
+            adapter.appendStreamCard(handle, new ChatItem.WeatherCardItem("card_search_weather",
+                    "{\"city\":\"北京\",\"temp\":\"--\",\"condition\":\"正在查询中...\",\"wind\":\"--\",\"humidity\":\"--\"}"));
+        }, 800);
+
+        // t+3000ms：结果卡（数据在正文开始前就已全部到达）
+        handler.postDelayed(() -> {
+            adapter.appendStreamCard(handle, new ChatItem.HotelCardItem("card_hotel_result",
+                    "{\"name\":\"北京王府井希尔顿酒店\",\"price\":\"¥899/晚\",\"rating\":4.7," +
+                    "\"location\":\"东城区王府井大街\",\"tags\":[\"含早餐\",\"近地铁\",\"免费取消\"]}"));
+            adapter.appendStreamCard(handle, new ChatItem.WeatherCardItem("card_weather_result",
+                    "{\"city\":\"北京\",\"temp\":\"18\",\"condition\":\"阴转多云\",\"wind\":\"北风 3级\",\"humidity\":\"55%\"}"));
+        }, 3000);
+
+        // t+3200ms 起：正文按完整段落块间隔注入（真实日志中正文最后下发）
+        handler.postDelayed(() -> streamBodySegments(adapter, handle, handler), 3200);
+    }
+
+    /**
+     * 正文按"完整 markdown 段落块"注入，每块间隔 450ms（模拟 SSE 分片到达节奏）。
+     * 每个块在 ChatAdapter 中是独立的文本段，放行后 startPrinting 全文打字——
+     * 与全量路径同构，避免 appendPrinting 的解析突变。
+     */
+    private static void streamBodySegments(ChatAdapter adapter, ChatAdapter.StreamHandle handle, android.os.Handler handler) {
+        final String[] segments = {
+                "已识别关键词：「北京」「1日游」（出发地：上海）\n\n",
+                "**【天翼出行】为您规划北京一日行程**\n\n",
+                "**行程总览**\n\n",
+                "| 天数 | 上午 | 下午 | 晚上 | 住宿参考 |\n" +
+                        "|------|------|------|------|----------|\n" +
+                        "| Day 1 | 天安门·故宫 | 景山·南锣鼓巷 | 前门·王府井 | 市区地铁沿线 |\n\n",
+                "**Day 1：皇城中轴·经典一日**\n\n",
+                "- **上午** 天安门广场 → 故宫博物院（务必提前预约门票）\n" +
+                        "- **中午** 故宫周边简餐，尝一碗老北京炸酱面\n" +
+                        "- **下午** 景山公园俯瞰故宫全景 → 南锣鼓巷胡同漫步\n" +
+                        "- **晚上** 前门大街 · 王府井夜景与小吃\n\n",
+                "> 💡 **出行小贴士**：明日北京阴转多云 18°C，早晚偏凉记得带件薄外套；" +
+                        "故宫周一闭馆请避开；地铁1号线贯穿核心景点，出行首选。\n\n",
+                "如需我帮您安排上海往返北京的机票或酒店，告诉我具体日期即可～"
+        };
+
+        final int intervalMs = 450;
+        final int[] index = {0};
+        Runnable tick = new Runnable() {
+            @Override public void run() {
+                if (index[0] >= segments.length) {
+                    adapter.endStream(handle);
+                    return;
+                }
+                // 每个完整块注入为一个独立文本段（startPrinting 全文渲染）
+                adapter.appendStreamText(handle, segments[index[0]]);
+                adapter.endStreamText(handle);
+                index[0]++;
+                handler.postDelayed(this, intervalMs);
+            }
+        };
+        tick.run(); // 第一块立即下发
+    }
 }

@@ -100,10 +100,18 @@ public class ChatRecyclerView extends RecyclerView {
 
         // 高度去抖
         int range = computeVerticalScrollRange();
-        if (range == lastRange) return;
-        lastRange = range;
+        if (range != lastRange) {
+            lastRange = range;
+            if (!isScrollPending) {
+                isScrollPending = true;
+                scrollHandler.postDelayed(scrollRunnable, 16);
+            }
+            return;
+        }
 
-        // 合并防抖：16ms 内多次请求合并为一次
+        // 高度未变也可能是"新 item 刚 notify 尚未布局"（notifyItemInserted 的布局在下一帧）：
+        // 此刻 range 仍是旧值，直接 return 会漏掉新卡片/新段落插入后的滚动。
+        // 安排一次延迟兜底，16ms 后布局完成，doScrollToBottom 会按真实距离滚动。
         if (isScrollPending) return;
         isScrollPending = true;
         scrollHandler.postDelayed(scrollRunnable, 16);
