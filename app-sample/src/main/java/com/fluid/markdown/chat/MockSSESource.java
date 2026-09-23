@@ -130,13 +130,6 @@ public class MockSSESource {
                 "建议穿薄外套或长袖，早晚温差较大。\n\n" +
                 "- 紫外线指数：中等\n" +
                 "- 空气质量：AQI 45（优）\n\n" +
-                "### 上海\n\n" +
-                "{{weather:{\"city\":\"上海\",\"temp\":\"26\",\"condition\":\"晴\",\"wind\":\"东风 2级\",\"humidity\":\"48%\"}}}" +
-                "\n\n" +
-                "上海明天**晴天**，非常适合户外活动。\n" +
-                "可以去外滩散步、迪士尼游玩，不过注意防晒。\n\n" +
-                "- 紫外线指数：高\n" +
-                "- 空气质量：AQI 38（优）\n\n" +
                 "### 北京\n\n" +
                 "{{weather:{\"city\":\"北京\",\"temp\":\"18\",\"condition\":\"阴\",\"wind\":\"北风 4级\",\"humidity\":\"55%\"}}}" +
                 "\n\n" +
@@ -144,16 +137,21 @@ public class MockSSESource {
                 "不太适合户外长时间活动，可选择室内景点。\n\n" +
                 "- 紫外线指数：低\n" +
                 "- 空气质量：AQI 85（良）\n\n" +
-                "### 广州\n\n" +
-                "{{weather:{\"city\":\"广州\",\"temp\":\"30\",\"condition\":\"雷阵雨\",\"wind\":\"南风 3级\",\"humidity\":\"82%\"}}}" +
-                "\n\n" +
-                "广州明天有**雷阵雨**，出门记得带伞！\n" +
-                "雨后气温会降低一些，体感会比较闷热。\n\n" +
                 "### 哈尔滨\n\n" +
                 "{{weather:{\"city\":\"哈尔滨\",\"temp\":\"5\",\"condition\":\"小雪\",\"wind\":\"北风 5级\",\"humidity\":\"72%\"}}}" +
                 "\n\n" +
                 "哈尔滨明天有**小雪**，气温较低，注意保暖！\n\n" +
                 "---\n\n" +
+                "### 未来7天天气预报\n\n" +
+                "以下是未来一周的天气趋势，方便您提前规划出行：\n\n" +
+                "| 城市 | 温度 | 穿衣建议 |\n" +
+                "|------|------|----------|\n" +
+                "| 杭州 | 24° | 薄外套+长袖 |\n" +
+                "| 上海 | 26° | 短袖+防晒 |\n" +
+                "| 北京 | 18° | 外套+长裤 |\n" +
+                "| 广州 | 30° | 短袖+雨伞 |\n" +
+                "| 哈尔滨 | 5° | 棉衣+围巾 |\n\n" +
+                "> 数据来源：中国气象局，更新时间 09-23 08:00\n\n" +
                 "### 穿衣建议\n\n" +
                 "| 城市 | 温度 | 穿衣建议 |\n" +
                 "|------|------|----------|\n" +
@@ -163,6 +161,110 @@ public class MockSSESource {
                 "| 广州 | 30° | 短袖+雨伞 |\n" +
                 "| 哈尔滨 | 5° | 棉衣+围巾 |\n\n" +
                 "希望这些信息对您的出行有帮助！";
+    }
+
+    // ==================== 天气（流式时间轴 mock） ====================
+
+    /**
+     * 按真实 WebSocket 下发时间轴 mock 天气场景：
+     * <pre>
+     * t0       短文本「好的，我为您查询了…」
+     * t+600ms  杭州天气卡 + 描述文本
+     * t+1800ms 北京天气卡 + 描述文本
+     * t+3000ms 哈尔滨天气卡 + 描述文本
+     * t+4200ms 起：7天表格 + 穿衣建议 + 结尾按段落块间隔注入
+     * </pre>
+     * 天气卡片正常穿插显示（不参与行程汇总），文本逐段打字机渲染。
+     */
+    public static void streamWeatherRecommendation(ChatAdapter adapter, android.os.Handler handler) {
+        ChatAdapter.StreamHandle handle = adapter.beginStream();
+
+        // t0：开头短文本
+        adapter.appendStreamText(handle, "好的，我为您查询了明天主要城市的天气情况！\n\n");
+        adapter.endStreamText(handle);
+
+        // t+600ms：杭州
+        handler.postDelayed(() -> {
+            adapter.appendStreamText(handle, "## 天气预报\n\n明天全国大部分地区天气较好，以下是几个主要城市的详细天气：\n\n### 杭州\n\n");
+            adapter.endStreamText(handle);
+            adapter.appendStreamCard(handle, new ChatItem.WeatherCardItem("card_weather_1",
+                    "{\"city\":\"杭州\",\"temp\":\"24\",\"condition\":\"多云\",\"wind\":\"东南风 3级\",\"humidity\":\"65%\"}"));
+            adapter.appendStreamText(handle, "杭州明天**多云**，气温适宜，适合外出游玩。\n" +
+                    "建议穿薄外套或长袖，早晚温差较大。\n\n" +
+                    "- 紫外线指数：中等\n" +
+                    "- 空气质量：AQI 45（优）\n\n");
+            adapter.endStreamText(handle);
+        }, 600);
+
+        // t+1800ms：北京
+        handler.postDelayed(() -> {
+            adapter.appendStreamText(handle, "### 北京\n\n");
+            adapter.endStreamText(handle);
+            adapter.appendStreamCard(handle, new ChatItem.WeatherCardItem("card_weather_2",
+                    "{\"city\":\"北京\",\"temp\":\"18\",\"condition\":\"阴\",\"wind\":\"北风 4级\",\"humidity\":\"55%\"}"));
+            adapter.appendStreamText(handle, "北京明天**阴天**，气温偏凉，建议带件外套。\n" +
+                    "不太适合户外长时间活动，可选择室内景点。\n\n" +
+                    "- 紫外线指数：低\n" +
+                    "- 空气质量：AQI 85（良）\n\n");
+            adapter.endStreamText(handle);
+        }, 1800);
+
+        // t+3000ms：哈尔滨
+        handler.postDelayed(() -> {
+            adapter.appendStreamText(handle, "### 哈尔滨\n\n");
+            adapter.endStreamText(handle);
+            adapter.appendStreamCard(handle, new ChatItem.WeatherCardItem("card_weather_3",
+                    "{\"city\":\"哈尔滨\",\"temp\":\"5\",\"condition\":\"小雪\",\"wind\":\"北风 5级\",\"humidity\":\"72%\"}"));
+            adapter.appendStreamText(handle, "哈尔滨明天有**小雪**，气温较低，注意保暖！\n\n");
+            adapter.endStreamText(handle);
+        }, 3000);
+
+        // t+4200ms 起：7天表格 + 穿衣建议 + 结尾
+        handler.postDelayed(() -> streamWeatherTailSegments(adapter, handle, handler), 4200);
+    }
+
+    /**
+     * 天气正文尾部段落（7天表格 + 穿衣建议 + 结尾）按完整段落块间隔注入。
+     */
+    private static void streamWeatherTailSegments(ChatAdapter adapter, ChatAdapter.StreamHandle handle, android.os.Handler handler) {
+        final String[] segments = {
+                "---\n\n### 未来7天天气预报\n\n以下是未来一周的天气趋势，方便您提前规划出行：\n\n" +
+                        "| 日期 | 星期 | 天气 | 最高温 | 最低温 | 风力 | 湿度 | 空气质量 |\n" +
+                        "|------|------|------|--------|--------|------|------|----------|\n" +
+                        "| 09-23 | 周一 | 多云 | 28° | 20° | 东南风 3级 | 65% | 优 (45) |\n" +
+                        "| 09-24 | 周二 | 晴 | 30° | 21° | 东风 2级 | 48% | 优 (38) |\n" +
+                        "| 09-25 | 周三 | 阴 | 22° | 16° | 北风 4级 | 55% | 良 (85) |\n" +
+                        "| 09-26 | 周四 | 雷阵雨 | 26° | 19° | 南风 3级 | 82% | 良 (78) |\n" +
+                        "| 09-27 | 周五 | 小雨 | 20° | 14° | 北风 5级 | 75% | 良 (72) |\n" +
+                        "| 09-28 | 周六 | 多云转晴 | 25° | 18° | 西风 2级 | 50% | 优 (42) |\n" +
+                        "| 09-29 | 周日 | 晴 | 27° | 19° | 东风 3级 | 45% | 优 (35) |\n\n",
+                "> 数据来源：中国气象局，更新时间 09-23 08:00\n\n",
+                "### 穿衣建议\n\n" +
+                        "| 城市 | 温度 | 穿衣建议 |\n" +
+                        "|------|------|----------|\n" +
+                        "| 杭州 | 24° | 薄外套+长袖 |\n" +
+                        "| 上海 | 26° | 短袖+防晒 |\n" +
+                        "| 北京 | 18° | 外套+长裤 |\n" +
+                        "| 广州 | 30° | 短袖+雨伞 |\n" +
+                        "| 哈尔滨 | 5° | 棉衣+围巾 |\n\n",
+                "希望这些信息对您的出行有帮助！"
+        };
+
+        final int intervalMs = 500;
+        final int[] index = {0};
+        Runnable tick = new Runnable() {
+            @Override public void run() {
+                if (index[0] >= segments.length) {
+                    adapter.endStream(handle);
+                    return;
+                }
+                adapter.appendStreamText(handle, segments[index[0]]);
+                adapter.endStreamText(handle);
+                index[0]++;
+                handler.postDelayed(this, intervalMs);
+            }
+        };
+        tick.run();
     }
 
     // ==================== 综合场景（文本+天气+火车+机票+酒店交替） ====================
@@ -249,52 +351,58 @@ public class MockSSESource {
     // ==================== 行程规划（真实时间轴流式 mock） ====================
 
     /**
-     * 按真实 WebSocket 下发时间轴 mock 行程规划场景：
+     * 按真实 WebSocket 下发时间轴 mock 行程规划场景（参考 egame TravelCardParser + TravelAdapterSetupHelper）：
      * <pre>
+     * t0       itinerary 标识帧到达 → 开启行程规划模式（参考 egame onItineraryDetected）
      * t0       短文本「好的，稍等一下～」
-     * t+800ms  过程卡：正在搜索酒店 / 正在查询天气（真实日志中卡片在 3 秒内全部下发）
-     * t+3000ms 结果卡：酒店结果 / 天气结果
-     * t+3200ms 起正文按"完整段落块"间隔注入（每块都是闭合的 markdown 结构）
+     * t+800ms  天气卡（天气不参与行程汇总，正常穿插显示）
+     * t+1500ms 出行卡片数据到达：酒店/火车/机票（行程规划模式下累积到 handle，不穿插显示）
+     * t+2000ms 起正文按"完整段落块"间隔注入
+     * 正文全部下发后 endStream → 累积的出行卡片汇聚为 ItineraryCardItem 统一插入底部
      * </pre>
-     * 展示顺序由 ChatAdapter 闸门控制：短文本打字机打完 → 卡片按序出现 → 正文逐段打字机。
-     * <p>
-     * 正文按"完整段落块"注入而非逐字符/逐小段流式：
-     * 完整块保证每个文本段用 startPrinting 一次性渲染（与全量路径一致、高度单调增长），
-     * 规避 appendPrinting 全量重解析在 markdown 结构闭合瞬间引起的高度突变
-     * （表现为"正文段与上方卡片之间先出现大片留白、随打字推进逐渐缩小"）。
+     * 最终展示效果：文本段在上方逐段打字机渲染，出行卡片（酒店/火车/机票）统一固定在最下面。
      */
     public static void streamItineraryPlan(ChatAdapter adapter, android.os.Handler handler) {
         ChatAdapter.StreamHandle handle = adapter.beginStream();
 
+        // 参考 egame：收到 itinerary 标识帧，切换为行程规划模式
+        adapter.setItineraryMode(handle, true);
+
         // t0：短文本（真实日志第一条 delta）
         adapter.appendStreamText(handle, "好的，稍等一下～\n\n");
 
-        // t+800ms：过程卡（数据到达即入列，显示由闸门决定）
+        // t+800ms：天气卡（天气不参与行程汇总，正常穿插显示）
         handler.postDelayed(() -> {
-            adapter.appendStreamCard(handle, new ChatItem.HotelCardItem("card_search_hotel",
-                    "{\"name\":\"🏨 正在为您搜索酒店资源\",\"price\":\"搜索中...\",\"rating\":4.0," +
-                    "\"location\":\"北京 · 王府井/前门商圈\",\"tags\":[\"正在检索\",\"预计3秒\"]}"));
-            adapter.appendStreamCard(handle, new ChatItem.WeatherCardItem("card_search_weather",
-                    "{\"city\":\"北京\",\"temp\":\"--\",\"condition\":\"正在查询中...\",\"wind\":\"--\",\"humidity\":\"--\"}"));
+            adapter.appendStreamCard(handle, new ChatItem.WeatherCardItem("card_weather_result",
+                    "{\"city\":\"北京\",\"temp\":\"18\",\"condition\":\"阴转多云\",\"wind\":\"北风 3级\",\"humidity\":\"55%\"}"));
         }, 800);
 
-        // t+3000ms：结果卡（数据在正文开始前就已全部到达）
+        // t+1500ms：出行卡片数据到达（行程规划模式下累积到 handle，不穿插到文本中）
         handler.postDelayed(() -> {
             adapter.appendStreamCard(handle, new ChatItem.HotelCardItem("card_hotel_result",
                     "{\"name\":\"北京王府井希尔顿酒店\",\"price\":\"¥899/晚\",\"rating\":4.7," +
                     "\"location\":\"东城区王府井大街\",\"tags\":[\"含早餐\",\"近地铁\",\"免费取消\"]}"));
-            adapter.appendStreamCard(handle, new ChatItem.WeatherCardItem("card_weather_result",
-                    "{\"city\":\"北京\",\"temp\":\"18\",\"condition\":\"阴转多云\",\"wind\":\"北风 3级\",\"humidity\":\"55%\"}"));
-        }, 3000);
+            adapter.appendStreamCard(handle, new ChatItem.HotelCardItem("card_hotel_result_2",
+                    "{\"name\":\"北京前门皇家驿栈\",\"price\":\"¥658/晚\",\"rating\":4.5," +
+                    "\"location\":\"前门大街\",\"tags\":[\"含早餐\",\"近景点\",\"免费升级\"]}"));
+            adapter.appendStreamCard(handle, new ChatItem.TrainCardItem("card_train_result",
+                    "{\"trainNo\":\"G102\",\"from\":\"上海虹桥\",\"to\":\"北京南\",\"departTime\":\"07:00\"," +
+                    "\"arriveTime\":\"11:28\",\"duration\":\"4小时28分\",\"price\":\"¥553\"}"));
+            adapter.appendStreamCard(handle, new ChatItem.FlightCardItem("card_flight_result",
+                    "{\"flightNo\":\"CA1502\",\"airline\":\"中国国航\",\"from\":\"上海虹桥\",\"to\":\"北京首都\"," +
+                    "\"departTime\":\"08:30\",\"arriveTime\":\"10:50\",\"duration\":\"2小时20分\",\"price\":\"¥780\",\"cabin\":\"经济舱\"}"));
+        }, 1500);
 
-        // t+3200ms 起：正文按完整段落块间隔注入（真实日志中正文最后下发）
-        handler.postDelayed(() -> streamBodySegments(adapter, handle, handler), 3200);
+        // t+2000ms 起：正文按完整段落块间隔注入（真实日志中正文最后下发）
+        handler.postDelayed(() -> streamBodySegments(adapter, handle, handler), 2000);
     }
 
     /**
      * 正文按"完整 markdown 段落块"注入，每块间隔 450ms（模拟 SSE 分片到达节奏）。
      * 每个块在 ChatAdapter 中是独立的文本段，放行后 startPrinting 全文打字——
      * 与全量路径同构，避免 appendPrinting 的解析突变。
+     * <p>
+     * 正文全部下发后 endStream：行程规划模式下将累积的出行卡片汇聚为 ItineraryCardItem 插入底部。
      */
     private static void streamBodySegments(ChatAdapter adapter, ChatAdapter.StreamHandle handle, android.os.Handler handler) {
         final String[] segments = {
@@ -309,7 +417,7 @@ public class MockSSESource {
                         "- **中午** 故宫周边简餐，尝一碗老北京炸酱面\n" +
                         "- **下午** 景山公园俯瞰故宫全景 → 南锣鼓巷胡同漫步\n" +
                         "- **晚上** 前门大街 · 王府井夜景与小吃\n\n",
-                "> 💡 **出行小贴士**：明日北京阴转多云 18°C，早晚偏凉记得带件薄外套；" +
+                "> 出行小贴士：明日北京阴转多云 18°C，早晚偏凉记得带件薄外套；" +
                         "故宫周一闭馆请避开；地铁1号线贯穿核心景点，出行首选。\n\n",
                 "如需我帮您安排上海往返北京的机票或酒店，告诉我具体日期即可～"
         };
@@ -319,16 +427,16 @@ public class MockSSESource {
         Runnable tick = new Runnable() {
             @Override public void run() {
                 if (index[0] >= segments.length) {
+                    // 正文全部下发完毕 → endStream 将行程规划卡片汇总插入底部
                     adapter.endStream(handle);
                     return;
                 }
-                // 每个完整块注入为一个独立文本段（startPrinting 全文渲染）
                 adapter.appendStreamText(handle, segments[index[0]]);
                 adapter.endStreamText(handle);
                 index[0]++;
                 handler.postDelayed(this, intervalMs);
             }
         };
-        tick.run(); // 第一块立即下发
+        tick.run();
     }
 }

@@ -28,11 +28,12 @@ import java.util.function.Function;
  */
 public class AnswerCardAdapter extends ListAdapter<ChatItem, RecyclerView.ViewHolder> {
 
-    public static final int VT_TEXT    = 0;
-    public static final int VT_HOTEL   = 1;
-    public static final int VT_TRAIN   = 2;
-    public static final int VT_FLIGHT  = 3;
-    public static final int VT_WEATHER = 4;
+    public static final int VT_TEXT      = 0;
+    public static final int VT_HOTEL     = 1;
+    public static final int VT_TRAIN     = 2;
+    public static final int VT_FLIGHT    = 3;
+    public static final int VT_WEATHER   = 4;
+    public static final int VT_ITINERARY = 5;
 
     private final ElementClickEventCallback callback;
     private final List<Function<List<ChatItem>, Void>> itemsChangedObservers = new ArrayList<>();

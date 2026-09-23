@@ -66,6 +66,14 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         final AnswerEntry entry;
         /** 当前正在增长的文本段（卡片之后的新文本 delta 会开新段） */
         ChatItem.TextItem currentText;
+        /**
+         * 行程规划模式（参考 egame TravelCardParser.isItineraryMode）：
+         * 卡片数据不穿插到文本中，而是累积在此列表，endStream 时统一生成 ItineraryCardItem 插入底部。
+         */
+        boolean itineraryMode;
+        final List<TrainCardData> pendingTrains = new ArrayList<>();
+        final List<FlightCardData> pendingFlights = new ArrayList<>();
+        final List<HotelCardData> pendingHotels = new ArrayList<>();
         StreamHandle(AnswerEntry entry) { this.entry = entry; }
     }
 
@@ -242,11 +250,39 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     }
 
     /**
-     * 追加一张卡片：数据到达即入列，显示时机由闸门决定。
-     * 卡片之后到达的文本 delta 会开启新的文本段。
+     * 设置行程规划模式（参考 egame onItineraryDetected）。
+     * 开启后，后续 appendStreamCard 的出行卡片（酒店/火车/机票）不穿插到文本中，
+     * 而是累积到 handle 内部，在 endStream 时统一生成 ItineraryCardItem 插入底部。
+     */
+    public void setItineraryMode(StreamHandle handle, boolean enabled) {
+        if (handle != null) handle.itineraryMode = enabled;
+    }
+
+    /**
+     * 追加一张卡片。
+     * <p>
+     * 行程规划模式下（参考 egame TravelAdapterSetupHelper.setupTravelParsers）：
+     * 酒店/火车/机票卡片数据累积到 handle，不立即显示，endStream 时统一汇总插入底部。
+     * 天气等非出行卡片仍然正常穿插显示。
+     * <p>
+     * 普通模式下：卡片数据到达即入列，显示时机由闸门决定。
      */
     public void appendStreamCard(StreamHandle handle, ChatItem cardItem) {
         if (handle == null || cardItem == null) return;
+
+        if (handle.itineraryMode) {
+            if (cardItem instanceof ChatItem.HotelCardItem) {
+                handle.pendingHotels.add(HotelCardData.fromJson(((ChatItem.HotelCardItem) cardItem).json));
+                return;
+            } else if (cardItem instanceof ChatItem.TrainCardItem) {
+                handle.pendingTrains.add(TrainCardData.fromJson(((ChatItem.TrainCardItem) cardItem).json));
+                return;
+            } else if (cardItem instanceof ChatItem.FlightCardItem) {
+                handle.pendingFlights.add(FlightCardData.fromJson(((ChatItem.FlightCardItem) cardItem).json));
+                return;
+            }
+        }
+
         AnswerEntry entry = handle.entry;
         entry.pendingItems.add(cardItem);
         handle.currentText = null;
@@ -265,9 +301,31 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         handle.currentText = null;
     }
 
-    /** 结束流式回答（demo 无底部点赞栏，预留收尾扩展点）。 */
+    /**
+     * 结束流式回答。
+     * <p>
+     * 行程规划模式下：将本轮累积的出行卡片数据汇聚为一个 ItineraryCardItem，
+     * 加入 pendingItems 尾部，由闸门控制显示时机——
+     * 前面的文本段打字机全部打完后，ItineraryCardItem 才会出现在底部。
+     */
     public void endStream(StreamHandle handle) {
-        // 预留：正式项目在此放行 BottomLike 等收尾 item
+        if (handle == null) return;
+        if (handle.itineraryMode) {
+            boolean hasData = !handle.pendingTrains.isEmpty()
+                    || !handle.pendingFlights.isEmpty()
+                    || !handle.pendingHotels.isEmpty();
+            if (hasData) {
+                ChatItem.ItineraryCardItem itineraryItem = new ChatItem.ItineraryCardItem(
+                        "itinerary_" + System.currentTimeMillis(),
+                        new ArrayList<>(handle.pendingTrains),
+                        new ArrayList<>(handle.pendingFlights),
+                        new ArrayList<>(handle.pendingHotels)
+                );
+                handle.entry.pendingItems.add(itineraryItem);
+                handle.currentText = null;
+                releaseNext(handle.entry);
+            }
+        }
     }
 
     /** 已放行显示的文本段数据变化 → payload 增量刷新；未放行的无需刷新。 */
@@ -314,15 +372,14 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         }
     }
 
-    /**
-     * 直接向 rows 列表添加一个 AnswerRow 并通知 RecyclerView。
-     */
+    /** 直接向 rows 列表末尾添加一个 AnswerRow 并通知 RecyclerView。 */
     private void addAnswerRow(AnswerEntry entry, ChatItem item) {
-        entry.items.add(item);
         int entryIndex = entries.indexOf(entry);
-        int insertPos = entryStartPosition(entryIndex) + entry.items.size() - 1;
+        entry.items.add(item);
+        int localIdx = entry.items.size() - 1;
+        int insertPos = entryStartPosition(entryIndex) + localIdx;
         AnswerRow row = new AnswerRow(entry.entryId, entry.adapter,
-                entry.items.size() - 1, entry.items.size(), item);
+                localIdx, entry.items.size(), item);
         rows.add(insertPos, row);
         notifyItemInserted(insertPos);
         if (chatRV != null) chatRV.requestScrollToBottom();
@@ -531,7 +588,12 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 }
             } else {
                 // 卡片
-                if (item instanceof ChatItem.HotelCardItem) {
+                if (item instanceof ChatItem.ItineraryCardItem) {
+                    ChatItem.ItineraryCardItem itinerary = (ChatItem.ItineraryCardItem) item;
+                    ItineraryCardView v = new ItineraryCardView(itemView.getContext());
+                    v.bind(itinerary.trains, itinerary.flights, itinerary.hotels);
+                    contentContainer.addView(v);
+                } else if (item instanceof ChatItem.HotelCardItem) {
                     HotelCardView v = new HotelCardView(itemView.getContext());
                     v.bind(HotelCardData.fromJson(((ChatItem.HotelCardItem) item).json));
                     contentContainer.addView(v);

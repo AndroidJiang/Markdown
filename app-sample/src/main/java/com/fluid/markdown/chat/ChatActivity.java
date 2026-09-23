@@ -108,7 +108,7 @@ public class ChatActivity extends AppCompatActivity {
     private void sendInitialMessage() {
         adapter.addUserMessage("帮我规划明天杭州出行");
         handler.postDelayed(() -> {
-            adapter.addAIResponse(MockSSESource.buildTravelPlan());
+            MockSSESource.streamItineraryPlan(adapter, handler);
             recyclerView.forceScrollToBottom();
         }, 500);
     }
@@ -124,6 +124,9 @@ public class ChatActivity extends AppCompatActivity {
             if (containsAny(text, "行程规划", "规划行程", "一日游", "1日游", "一日行程")) {
                 // 行程规划：mock 真实 WebSocket 下发时间轴（数据分批到达，显示由闸门控节奏）
                 MockSSESource.streamItineraryPlan(adapter, handler);
+            } else if (containsAny(text, "天气", "weather", "气温")) {
+                // 天气：流式时间轴 mock（天气卡片穿插 + 文本逐段打字机）
+                MockSSESource.streamWeatherRecommendation(adapter, handler);
             } else {
                 adapter.addAIResponse(selectResponse(text));
             }

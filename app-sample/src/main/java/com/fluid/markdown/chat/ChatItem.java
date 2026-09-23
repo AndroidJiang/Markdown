@@ -2,6 +2,8 @@ package com.fluid.markdown.chat;
 
 import com.fluid.afm.markdown.widget.PrinterMarkDownTextView;
 
+import java.util.List;
+
 /**
  * 回答 item 数据模型（参考 egame ChatItem）。
  * 每种卡片类型对应一个子类。
@@ -83,5 +85,30 @@ public abstract class ChatItem {
 
         @Override public String getId() { return id; }
         @Override public int getViewType() { return AnswerCardAdapter.VT_WEATHER; }
+    }
+
+    /**
+     * 行程规划汇总卡片（参考 egame TravelItineraryCardItem）。
+     * 汇聚本轮查询结果中的交通（火车票/机票）和住宿（酒店）数据，
+     * 统一展示在 AI 回答底部，不穿插在文本中间。
+     */
+    public static class ItineraryCardItem extends ChatItem {
+        public final String id;
+        public final List<TrainCardData> trains;
+        public final List<FlightCardData> flights;
+        public final List<HotelCardData> hotels;
+
+        public ItineraryCardItem(String id,
+                                 List<TrainCardData> trains,
+                                 List<FlightCardData> flights,
+                                 List<HotelCardData> hotels) {
+            this.id = id;
+            this.trains = trains;
+            this.flights = flights;
+            this.hotels = hotels;
+        }
+
+        @Override public String getId() { return id; }
+        @Override public int getViewType() { return AnswerCardAdapter.VT_ITINERARY; }
     }
 }
