@@ -62,6 +62,7 @@ public class PrinterMarkDownTextView extends AppCompatTextView implements IMarkd
     private int mInterval = 25;
     private int mChunkSize = 1;
     private SizeChangedListener mSizeChangedListener;
+    private PrintTickListener mPrintTickListener;
     private PrintingEventListener mPrintingEventListener;
     private boolean isPrinting;
     private boolean isStopByUser;
@@ -270,6 +271,10 @@ public class PrinterMarkDownTextView extends AppCompatTextView implements IMarkd
         mSizeChangedListener = listener;
     }
 
+    public void setPrintTickListener(PrintTickListener listener) {
+        mPrintTickListener = listener;
+    }
+
     public void setPrintingEventListener(PrintingEventListener listener) {
         mPrintingEventListener = listener;
     }
@@ -344,6 +349,10 @@ public class PrinterMarkDownTextView extends AppCompatTextView implements IMarkd
             mCurrentPrintIndex = end;
             gradiantColorAnimateText(mCurrentPrintIndex, newSpannable);
             setTextSafely(newSpannable);
+            // 每帧打印后触发 tick，外层据此持续跟滚（不等高度变化/换行）
+            if (mPrintTickListener != null) {
+                mPrintTickListener.onPrintTick();
+            }
             if (!isStopByUser) {
                 MAIN_HANDLER.removeCallbacks(mPrintTask);
                 MAIN_HANDLER.postDelayed(mPrintTask, mInterval);
@@ -604,6 +613,15 @@ public class PrinterMarkDownTextView extends AppCompatTextView implements IMarkd
 
     public interface SizeChangedListener {
         void onSizeChanged(int width, int height);
+    }
+
+    /**
+     * 打字机每帧打印 tick 回调（独立于高度变化）。
+     * 千问方案：TypewriterController 每帧（Choreographer）推进文本后都会触发外层滚动检查，
+     * 而非仅高度变化（换行）时触发——否则同一行内逐字打印不滚动，视觉上"一行一行跳"。
+     */
+    public interface PrintTickListener {
+        void onPrintTick();
     }
 
     public interface PrintingEventListener {

@@ -2,6 +2,7 @@ package com.fluid.markdown.chat;
 
 import android.graphics.Canvas;
 import android.graphics.drawable.Drawable;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -382,6 +383,7 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
                 localIdx, entry.items.size(), item);
         rows.add(insertPos, row);
         notifyItemInserted(insertPos);
+        Log.d("SCROLL_DBG", "addAnswerRow: item=" + item.getId() + " insertPos=" + insertPos + " -> requestScroll");
         if (chatRV != null) chatRV.requestScrollToBottom();
     }
 

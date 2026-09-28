@@ -5,6 +5,7 @@ import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.view.animation.DecelerateInterpolator;
 import android.view.View;
 
@@ -19,13 +20,15 @@ import androidx.recyclerview.widget.RecyclerView;
  * 1. PrinterMarkDownTextView 流式打印时高度每帧都在变，
  *    onSizeChanged 回调直接触发 requestScrollToBottom，
  *    持续不断地跟滚，视觉上就是一直在平滑滚动
- * 2. 每次高度变化用 ValueAnimator + scrollBy 做 ~200ms 减速动画，
+ * 2. 每次高度变化用 ValueAnimator + scrollBy 做 ~250ms 减速动画，
  *    新请求取消旧动画、从当前位移继续，动画重叠 = 连续平滑
  * 3. 高度去抖：computeVerticalScrollRange 没变化时不滚
  * 4. post 合并防抖：16ms 内多次请求合并为一次
  * 5. 滚动状态机：AUTO_SCROLL / MANUAL_SCROLL / MANUAL_SCROLL_PAUSED / NO_SCROLL
  */
 public class ChatRecyclerView extends RecyclerView {
+
+    private static final String TAG = "SCROLL_DBG";
 
     private ChatScrollState autoScrollState = ChatScrollState.AUTO_SCROLL;
     private int lastRange = 0;
@@ -34,6 +37,9 @@ public class ChatRecyclerView extends RecyclerView {
     private final Runnable scrollRunnable = this::doScrollToBottom;
     private ValueAnimator scrollAnimator;
     private int currentScrollDelta = 0;
+    private int requestCount = 0;
+    private int scrollCount = 0;
+    private int skipRangeCount = 0;
 
     private final OnScrollListener autoScrollListener = new OnScrollListener() {
         @Override
@@ -41,12 +47,15 @@ public class ChatRecyclerView extends RecyclerView {
             if (newState == SCROLL_STATE_DRAGGING) {
                 if (autoScrollState == ChatScrollState.AUTO_SCROLL) {
                     autoScrollState = ChatScrollState.MANUAL_SCROLL;
+                    Log.d(TAG, "state -> MANUAL_SCROLL (user drag)");
                 }
             } else if (newState == SCROLL_STATE_IDLE) {
                 if (isAtBottom() && autoScrollState != ChatScrollState.NO_SCROLL) {
                     autoScrollState = ChatScrollState.AUTO_SCROLL;
+                    Log.d(TAG, "state -> AUTO_SCROLL (at bottom)");
                 } else if (!isAtBottom() && autoScrollState == ChatScrollState.MANUAL_SCROLL) {
                     autoScrollState = ChatScrollState.MANUAL_SCROLL_PAUSED;
+                    Log.d(TAG, "state -> MANUAL_SCROLL_PAUSED");
                 }
             }
         }
@@ -98,13 +107,18 @@ public class ChatRecyclerView extends RecyclerView {
         if (autoScrollState != ChatScrollState.AUTO_SCROLL) return;
         if (getAdapter() == null || getAdapter().getItemCount() == 0) return;
 
+        requestCount++;
+
         // 高度去抖
         int range = computeVerticalScrollRange();
         if (range != lastRange) {
             lastRange = range;
             if (!isScrollPending) {
                 isScrollPending = true;
+                Log.d(TAG, "requestScrollToBottom: req#" + requestCount + " range=" + lastRange + "->" + range + " SCHEDULED (range changed)");
                 scrollHandler.postDelayed(scrollRunnable, 16);
+            } else {
+                Log.d(TAG, "requestScrollToBottom: req#" + requestCount + " range=" + lastRange + "->" + range + " SKIPPED (already pending)");
             }
             return;
         }
@@ -112,8 +126,13 @@ public class ChatRecyclerView extends RecyclerView {
         // 高度未变也可能是"新 item 刚 notify 尚未布局"（notifyItemInserted 的布局在下一帧）：
         // 此刻 range 仍是旧值，直接 return 会漏掉新卡片/新段落插入后的滚动。
         // 安排一次延迟兜底，16ms 后布局完成，doScrollToBottom 会按真实距离滚动。
-        if (isScrollPending) return;
+        skipRangeCount++;
+        if (isScrollPending) {
+            Log.d(TAG, "requestScrollToBottom: req#" + requestCount + " range=" + range + " SAME, skip#" + skipRangeCount + " (already pending)");
+            return;
+        }
         isScrollPending = true;
+        Log.d(TAG, "requestScrollToBottom: req#" + requestCount + " range=" + range + " SAME, skip#" + skipRangeCount + " SCHEDULED (fallback)");
         scrollHandler.postDelayed(scrollRunnable, 16);
     }
 
@@ -122,10 +141,19 @@ public class ChatRecyclerView extends RecyclerView {
      * <p>
      * 用 ValueAnimator + scrollBy 直接控制位移和时长。
      * 新请求取消旧动画，从当前位移继续滚动，动画重叠 = 连续平滑。
+     * 速度公式对齐千问 SmoothScrollerWithOffset：
+     * speedPerPixel = clamp(250 / remainingPx, 1.0, 7.0)
+     * 总时间 = remainingPx * speedPerPixel = min(250, 7.0 * remainingPx)
+     * - remainingPx >= 36px：固定 ~250ms 追底，高频触发叠加成近似匀速跟随
+     * - remainingPx < 36px：短时快速补齐，过渡自然
+     * - remainingPx = 0：不触发（已在 requestScrollToBottom 中拦截）
      */
     private void doScrollToBottom() {
         isScrollPending = false;
-        if (autoScrollState != ChatScrollState.AUTO_SCROLL) return;
+        if (autoScrollState != ChatScrollState.AUTO_SCROLL) {
+            Log.d(TAG, "doScrollToBottom: SKIP (state=" + autoScrollState + ")");
+            return;
+        }
         if (getAdapter() == null || getAdapter().getItemCount() == 0) return;
 
         // 计算剩余距离
@@ -133,19 +161,25 @@ public class ChatRecyclerView extends RecyclerView {
         int extent = computeVerticalScrollExtent();
         int offset = computeVerticalScrollOffset();
         int remainingPx = Math.max(0, range - extent - offset);
-        if (remainingPx <= 0) return;
+        if (remainingPx <= 0) {
+            Log.d(TAG, "doScrollToBottom: remainingPx=0, NO SCROLL (range=" + range + " ext=" + extent + " off=" + offset + ")");
+            return;
+        }
 
         // 取消旧动画，记录已滚动位移
-        if (scrollAnimator != null && scrollAnimator.isRunning()) {
+        boolean wasRunning = scrollAnimator != null && scrollAnimator.isRunning();
+        if (wasRunning) {
+            Log.d(TAG, "doScrollToBottom: CANCEL old animation (currentScrollDelta=" + currentScrollDelta + ")");
             scrollAnimator.cancel();
         }
         currentScrollDelta = 0;
 
-        // 时长：~200ms 减速动画
-        // 千问 SmoothScrollerWithOffset: min(250f/remainingPx, 7.5f) ms/px
-        // 总时间 ≈ min(250, 7.5 * remainingPx)
-        int duration = (int) Math.min(remainingPx * 7.5f, 200);
-        if (duration < 50) duration = 50;
+        // 千问速度公式：speedPerPixel = clamp(250/remainingPx, 1.0, 7.0)
+        // 总时间 = remainingPx * speedPerPixel = min(250, 7.0 * remainingPx)
+        int duration = (int) Math.min(remainingPx * 7.0f, 250);
+
+        scrollCount++;
+        Log.d(TAG, "doScrollToBottom: scroll#" + scrollCount + " remainingPx=" + remainingPx + " duration=" + duration + "ms range=" + range + " ext=" + extent + " off=" + offset + " (cancelOld=" + wasRunning + ")");
 
         scrollAnimator = ValueAnimator.ofInt(0, remainingPx);
         scrollAnimator.setDuration(duration);
@@ -182,8 +216,8 @@ public class ChatRecyclerView extends RecyclerView {
         int remainingPx = Math.max(0, range - extent - offset);
         if (remainingPx <= 0) return;
 
-        int duration = (int) Math.min(remainingPx * 7.5f, 200);
-        if (duration < 50) duration = 50;
+        int duration = (int) Math.min(remainingPx * 7.0f, 250);
+        Log.d(TAG, "forceScrollToBottom: remainingPx=" + remainingPx + " duration=" + duration + "ms");
 
         scrollAnimator = ValueAnimator.ofInt(0, remainingPx);
         scrollAnimator.setDuration(duration);

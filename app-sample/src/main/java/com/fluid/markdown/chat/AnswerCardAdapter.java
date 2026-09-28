@@ -1,5 +1,6 @@
 package com.fluid.markdown.chat;
 
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -207,6 +208,7 @@ public class AnswerCardAdapter extends ListAdapter<ChatItem, RecyclerView.ViewHo
                 @Override public void onPrintStart() {}
                 @Override public void onPrintStop(boolean printAll) {
                     item.isStreaming = false;
+                    Log.d("SCROLL_DBG", "onPrintStop: item=" + item.id + " printAll=" + printAll + " -> onHeightChanged");
                     if (adapter.heightListener != null) adapter.heightListener.onHeightChanged();
                 }
                 @Override public void onPrintPaused(int index) {}
@@ -216,7 +218,12 @@ public class AnswerCardAdapter extends ListAdapter<ChatItem, RecyclerView.ViewHo
             lastNotifiedHeight = 0;
             textView.setSizeChangedListener((width, height) -> {
                 if (height <= lastNotifiedHeight) return;
+                Log.d("SCROLL_DBG", "SizeChanged: item=" + item.id + " h=" + lastNotifiedHeight + "->" + height + " -> requestScroll");
                 lastNotifiedHeight = height;
+                adapter.notifyTextContentHeightChanged();
+            });
+            // 每帧打印 tick：独立于高度变化，让外层持续跟滚（千问方案）
+            textView.setPrintTickListener(() -> {
                 adapter.notifyTextContentHeightChanged();
             });
         }
