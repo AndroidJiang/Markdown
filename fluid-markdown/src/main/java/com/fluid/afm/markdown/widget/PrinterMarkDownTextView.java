@@ -8,6 +8,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.Editable;
+import android.text.Layout;
 import android.text.Spannable;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
@@ -17,7 +18,10 @@ import android.text.style.AbsoluteSizeSpan;
 import android.text.style.CharacterStyle;
 import android.text.style.ForegroundColorSpan;
 import android.util.AttributeSet;
+import android.util.SparseArray;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewParent;
 
 import androidx.annotation.NonNull;
@@ -42,7 +46,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import io.noties.markwon.ext.tables.TableRowSpan;
 import io.noties.markwon.image.AsyncDrawableSpan;
+import io.noties.markwon.utils.SpanUtils;
 
 public class PrinterMarkDownTextView extends AppCompatTextView implements IMarkdownLayer, DefaultLifecycleObserver, TextWatcher {
     private static final String TAG = "PrinterMarkDownTextView";
@@ -77,6 +83,22 @@ public class PrinterMarkDownTextView extends AppCompatTextView implements IMarkd
     private boolean isStarted;
     private MarkDownPrintData mPrintData;
 
+    // ===== 表格横向滚动 =====
+    private static final String TABLE_SCROLL_TAG = "TABLE_SCROLL_DBG";
+    /** 千问同款手势仲裁比例：|dy|×2 > |dx| 时视为纵向（列表优先），否则横向可接管表格滚动 */
+    private static final float VERTICAL_SCALE_RATIO = 2.0F;
+    /** tableIndex -> 横向滚动偏移（像素），随 TextView 生命周期持有 */
+    private final SparseArray<Integer> mTableScrollXs = new SparseArray<>();
+    private float mTableDownX;
+    private float mTableDownY;
+    private float mDownRawX;
+    private float mDownRawY;
+    private boolean mDownOnScrollableTable = false;
+    private boolean mTableHorizontalScrolling = false;
+    private TableRowSpan mActiveTableSpan;
+    private int mTableScrollStartX;
+    private int mTouchSlop;
+
     public PrinterMarkDownTextView(Context context) {
         this(context, null);
     }
@@ -102,6 +124,7 @@ public class PrinterMarkDownTextView extends AppCompatTextView implements IMarkd
         setHighlightColor(Color.TRANSPARENT);
         addTextChangedListener(this);
         setOnLongClickListener(v -> true);
+        mTouchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
     }
 
     public void init(@NonNull MarkdownStyles styles, ElementClickEventCallback callback) {
@@ -130,6 +153,7 @@ public class PrinterMarkDownTextView extends AppCompatTextView implements IMarkd
         }
         mOriginText = markdown;
         setMinHeight(0);
+        mTableScrollXs.clear();
         mMarkdownParser.getMarkwon().setMarkdown(this, markdown);
     }
 
@@ -156,6 +180,7 @@ public class PrinterMarkDownTextView extends AppCompatTextView implements IMarkd
         isStopByUser = false;
         mOriginText = content;
         isStarted = true;
+        mTableScrollXs.clear();
         if (startIndex <= 0) {
             startIndex = 0;
         }
@@ -253,6 +278,7 @@ public class PrinterMarkDownTextView extends AppCompatTextView implements IMarkd
         }
         mPrintData = markDownData;
         setMinHeight(0);
+        mTableScrollXs.clear();
         mParsedContentText = mPrintData.parsedMarkdownText;
         mCurrentPrintIndex = mPrintData.currentIndex;
         mChunkSize = mPrintData.chunkSize;
@@ -495,6 +521,221 @@ public class PrinterMarkDownTextView extends AppCompatTextView implements IMarkd
     @Override
     public String getOriginText() {
         return mOriginText;
+    }
+
+    @Override
+    public int getTableScrollX(int tableIndex) {
+        final Integer value = mTableScrollXs.get(tableIndex);
+        return value == null ? 0 : value;
+    }
+
+    @Override
+    public void setTableScrollX(int tableIndex, int scrollX) {
+        if (scrollX <= 0) {
+            mTableScrollXs.remove(tableIndex);
+        } else {
+            mTableScrollXs.put(tableIndex, scrollX);
+        }
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        if (handleTableHorizontalScroll(event)) {
+            return true;
+        }
+        return super.onTouchEvent(event);
+    }
+
+    /**
+     * 表格横向滚动手势（Span 自绘表格无法套 HorizontalScrollView，改为共享偏移平移）：
+     * - DOWN 落在可滚动表格上时先接管；若 DOWN 检测未命中，MOVE 横向主导时动态检测并接管，
+     *   双保险不依赖单次检测（事件由 MovementMethod 消费时本 View 仍是 touch target，MOVE 持续到达）；
+     * - 千问同款仲裁：|dy|×2 > |dx| 视为纵向，放行交还列表；横向主导则接管滚动，
+     *   并 requestDisallowInterceptTouchEvent 防止拖动中被列表中途抢占；
+     * - UP 未发生滚动时放行，交回原链路（单元格链接/标题栏按钮）；滚动结束则消费，避免误触。
+     */
+    private boolean handleTableHorizontalScroll(MotionEvent event) {
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN: {
+                mTableHorizontalScrolling = false;
+                mDownRawX = event.getX();
+                mDownRawY = event.getY();
+                mActiveTableSpan = findTableRowSpanUnder(event);
+                if (mActiveTableSpan == null) {
+                    mDownOnScrollableTable = false;
+                    return false; // 不在表格上：走原链路（链接点击等），MOVE 阶段仍可动态接管
+                }
+                final int range = mActiveTableSpan.getScrollRange(getTableContentWidth());
+                if (range <= 0) {
+                    MDLogger.d(TABLE_SCROLL_TAG, "DOWN table=" + mActiveTableSpan.getTableIndex()
+                            + " not scrollable, range=0, viewW=" + getTableContentWidth());
+                    mDownOnScrollableTable = false;
+                    return false;
+                }
+                mDownOnScrollableTable = true;
+                mTableDownX = event.getX();
+                mTableDownY = event.getY();
+                mTableScrollStartX = getTableScrollX(mActiveTableSpan.getTableIndex());
+                MDLogger.d(TABLE_SCROLL_TAG, "DOWN on table=" + mActiveTableSpan.getTableIndex()
+                        + " range=" + range);
+                return true;
+            }
+            case MotionEvent.ACTION_MOVE: {
+                if (mTableHorizontalScrolling && mActiveTableSpan != null) {
+                    applyTableScroll(event);
+                    return true;
+                }
+                final float rawDx = event.getX() - mDownRawX;
+                final float rawDy = event.getY() - mDownRawY;
+                // 千问仲裁：|dy|×2 > |dx| 视为纵向（交还列表），否则横向可接管
+                final boolean horizontalDominant =
+                        Math.abs(rawDx) > mTouchSlop
+                                && Math.abs(rawDy) * VERTICAL_SCALE_RATIO <= Math.abs(rawDx);
+
+                if (!mDownOnScrollableTable) {
+                    // DOWN 时未接管（可能检测未命中）：横向主导时动态检测触点下方是否是可滚表格，
+                    // 是则此刻接管——不依赖 DOWN 单次检测成败
+                    if (horizontalDominant) {
+                        final TableRowSpan span = findTableRowSpanUnder(event);
+                        if (span != null && span.getScrollRange(getTableContentWidth()) > 0) {
+                            mDownOnScrollableTable = true;
+                            mActiveTableSpan = span;
+                            mTableDownX = event.getX();
+                            mTableDownY = event.getY();
+                            mTableScrollStartX = getTableScrollX(span.getTableIndex());
+                            beginTableScrollState();
+                            MDLogger.d(TABLE_SCROLL_TAG, "MOVE takeover table=" + span.getTableIndex());
+                            applyTableScroll(event);
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+
+                // DOWN 已接管：等待/进行方向判定
+                if (!mTableHorizontalScrolling) {
+                    if (!horizontalDominant) {
+                        if (Math.abs(rawDy) > mTouchSlop) {
+                            // 纵向主导：放弃接管，父层列表将拦截剩余手势（随后收到 CANCEL）
+                            MDLogger.d(TABLE_SCROLL_TAG, "vertical dominant, release");
+                            mDownOnScrollableTable = false;
+                            return false;
+                        }
+                        return true; // 未过 slop，继续持有
+                    }
+                    mTableDownX = event.getX();
+                    mTableDownY = event.getY();
+                    mTableScrollStartX = getTableScrollX(mActiveTableSpan.getTableIndex());
+                    beginTableScrollState();
+                    MDLogger.d(TABLE_SCROLL_TAG, "start horizontal scroll");
+                }
+                applyTableScroll(event);
+                return true;
+            }
+            case MotionEvent.ACTION_UP: {
+                final boolean wasScrolling = mTableHorizontalScrolling;
+                final boolean downOnTable = mDownOnScrollableTable;
+                resetTableScrollGesture();
+                if (!downOnTable) {
+                    return false;
+                }
+                if (wasScrolling) {
+                    return true; // 滚动结束，消费，避免误触链接/按钮
+                }
+                // 未滚动：当作点击交回原链路（链接/标题栏按钮）
+                MDLogger.d(TABLE_SCROLL_TAG, "UP as click");
+                return super.onTouchEvent(event);
+            }
+            case MotionEvent.ACTION_CANCEL: {
+                final boolean downOnTable = mDownOnScrollableTable;
+                resetTableScrollGesture();
+                return downOnTable;
+            }
+            default:
+                return mTableHorizontalScrolling;
+        }
+    }
+
+    private void applyTableScroll(MotionEvent event) {
+        final int range = mActiveTableSpan.getScrollRange(getTableContentWidth());
+        int newScrollX = (int) (mTableScrollStartX - (event.getX() - mTableDownX));
+        newScrollX = Math.max(0, Math.min(range, newScrollX));
+        final int tableIndex = mActiveTableSpan.getTableIndex();
+        if (newScrollX != getTableScrollX(tableIndex)) {
+            setTableScrollX(tableIndex, newScrollX);
+            postInvalidateOnAnimation();
+            // 实测（TABLE_SCROLL_DBG 日志）：打字机结束后 invalidate/requestLayout 族触发的
+            // onDraw 会跳过 ReplacementSpan 绘制（疑似 ROM 对文本未变化时的绘制省略优化）；
+            // 而渲染期间能正常滚动靠的是每帧 setTextSafely(新切片) -> setText -> 完整重绘。
+            // 这里对齐该机制：重设同一文本对象，触发与打字机一致的全量重绘链路。
+            final CharSequence text = getText();
+            if (text instanceof SpannableStringBuilder) {
+                setTextSafely((SpannableStringBuilder) text);
+            }
+            MDLogger.d(TABLE_SCROLL_TAG, "scrollX=" + newScrollX + "/" + range);
+        }
+    }
+
+    /**
+     * 进入表格横滚状态：请求父层（聊天列表 RV）停止拦截剩余手势，
+     * 避免拖动轨迹中的纵向漂移让列表中途抢占（CANCEL 打断滚动）。
+     * requestDisallowInterceptTouchEvent 会沿 View 树自动向上传播。
+     */
+    private void beginTableScrollState() {
+        mTableHorizontalScrolling = true;
+        final ViewParent parent = getParent();
+        if (parent != null) {
+            parent.requestDisallowInterceptTouchEvent(true);
+        }
+    }
+
+    /** 恢复父层拦截权（抬手/取消后调用） */
+    private void releaseTableParentIntercept() {
+        final ViewParent parent = getParent();
+        if (parent != null) {
+            parent.requestDisallowInterceptTouchEvent(false);
+        }
+    }
+
+    private void resetTableScrollGesture() {
+        mDownOnScrollableTable = false;
+        mTableHorizontalScrolling = false;
+        mActiveTableSpan = null;
+        releaseTableParentIntercept();
+    }
+
+    /** 表格可用内容宽度（与 TableRowSpan getSize/layout 基准一致） */
+    private int getTableContentWidth() {
+        final CharSequence text = getText();
+        return SpanUtils.width(null, text);
+    }
+
+    /**
+     * 定位触点下方是否是表格行（TableRowSpan）。
+     * 表格行是 ReplacementSpan 只占 1 个字符，按触点 offset 精确查询在端点处可能不命中，
+     * 这里用整行字符区间查询，保证该行存在表格 span 时必然命中。
+     */
+    private TableRowSpan findTableRowSpanUnder(MotionEvent event) {
+        final Layout layout = getLayout();
+        final CharSequence text = getText();
+        if (layout == null || !(text instanceof Spannable)) {
+            MDLogger.d(TABLE_SCROLL_TAG, "findSpan: layout/text not ready");
+            return null;
+        }
+        final int x = (int) event.getX() - getTotalPaddingLeft() + getScrollX();
+        final int y = (int) event.getY() - getTotalPaddingTop() + getScrollY();
+        if (y < 0 || y > layout.getHeight()) {
+            return null;
+        }
+        final int line = layout.getLineForVertical(y);
+        final int lineStart = layout.getLineStart(line);
+        final int lineEnd = Math.max(lineStart + 1, layout.getLineEnd(line));
+        final TableRowSpan[] spans = ((Spannable) text).getSpans(lineStart, lineEnd, TableRowSpan.class);
+        if (spans.length > 0) {
+            return spans[0];
+        }
+        MDLogger.d(TABLE_SCROLL_TAG, "findSpan: no span at line=" + line + " range=[" + lineStart + "," + lineEnd + ")");
+        return null;
     }
 
     @Override

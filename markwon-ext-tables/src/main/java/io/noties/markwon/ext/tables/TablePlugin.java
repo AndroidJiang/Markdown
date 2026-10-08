@@ -309,6 +309,7 @@ public class TablePlugin extends AbstractMarkwonPlugin implements StreamOutState
                 if (useCachedSpan && cachedSpan != null && !isHideTitle) {
                     MDLogger.d(TAG, "get rowSpanCache span = " + cachedSpan);
                     final TableRowSpan span = getCachedSpan(tableIndex, length);
+                    span.setTableIndex(tableIndex);
 
                     cacheAndUpdateTableCurrentMaxNumber(tableIndex, span);
                     updateCachedTableCurrentMaxNumber(tableIndex);
@@ -345,6 +346,7 @@ public class TablePlugin extends AbstractMarkwonPlugin implements StreamOutState
                             mTableIsHeader.put(tableIndex, false);
                         }
                         final TableRowSpan span = new TableRowSpan(style, pendingTableRow, tableRowIsHeader, isHideTitle, tableRows % 2 == 1, tableRows);
+                        span.setTableIndex(tableIndex);
                         MDLogger.d(TAG, "new span");
 
                         cacheAndUpdateTableCurrentMaxNumber(tableIndex, span);

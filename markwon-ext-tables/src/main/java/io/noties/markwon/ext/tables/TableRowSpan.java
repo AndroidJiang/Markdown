@@ -99,6 +99,9 @@ public class TableRowSpan extends ReplacementSpan {
     private final int radius;
     private float leading;
 
+    /** 本表在文档中的序号；同一 TextView 可能渲染多张表，横向滚动偏移按表区分 */
+    private int tableIndex = -1;
+
     public TableRowSpan(
             @NonNull TableStyle tableStyle,
             @NonNull List<Cell> cells,
@@ -266,6 +269,22 @@ public class TableRowSpan extends ReplacementSpan {
         // @since 4.6.0 roundingDiff to offset last vertical border
         final float roundingDiff =(w - width / size) * size;
 
+        // ===== 表格横向滚动 =====
+        // 列宽含下限时内容总宽可能超过可视宽度 width，此时按共享偏移整体平移。
+        // 标题栏(TableBlockTitleBlockSpan)是独立 Span，不参与平移，天然固定。
+        final float contentWidth = w * size;
+        final boolean scrollable = contentWidth - width > 0.5F;
+        final int tableScrollX = scrollable ? obtainTableScrollX(text) : 0;
+        final int clipTop = top; // header 让位标题栏前的行顶
+        final int scrollSave = scrollable ? canvas.save() : -1;
+        if (scrollable) {
+            // 平移后的内容限制在可视区域内，防止画出文本区
+            canvas.clipRect(0, clipTop, width, bottom);
+            if (tableScrollX != 0) {
+                canvas.translate(-tableScrollX, 0);
+            }
+        }
+
         // 如果是头，向下移动height空白区域给表头的顶部区块绘制使用
         if (header && !isHideHeader) {
             top += mStyle.titleBarHeight();
@@ -286,7 +305,7 @@ public class TableRowSpan extends ReplacementSpan {
             if (paint.getColor() != 0) {
                 final int save = canvas.save();
                 try {
-                    rect.set(0, 0, width, bottom - top);
+                    rect.set(0, 0, contentWidth, bottom - top);
                     canvas.translate(x, top);
                     if (isCurrentLastLine && !isHideHeader) {
                         drawRectWithBottomRound(canvas, paint, rect, radius);
@@ -330,10 +349,10 @@ public class TableRowSpan extends ReplacementSpan {
                     final TableSpan span = spans[0];
                     if (LeadingMarginUtils.selfStart(start, text, span)) {
                         first = true;
-                        rect.set((int) x, top + borderWidth / 2, width, top + borderWidth + borderWidth / 2);
+                        rect.set((int) x, top + borderWidth / 2, contentWidth, top + borderWidth + borderWidth / 2);
                         if (header && isHideHeader && mStyle.drawBorder() && radius > 0) {
                             final int save = canvas.save();
-                            rect.set((int) x, top, width, bottom + radius);
+                            rect.set((int) x, top, contentWidth, bottom + radius);
                             canvas.clipRect(rect);
                             if (paint.getStrokeWidth() == 1) {
                                 paint.setStrokeWidth(2);
@@ -347,13 +366,13 @@ public class TableRowSpan extends ReplacementSpan {
                 }
             }
             // draw the line at the bottom
-             if (!isCurrentLastLine) {
-                rect.set((int) x, bottom - borderWidth / 2f, width, bottom);
+            if (!isCurrentLastLine) {
+                rect.set((int) x, bottom - borderWidth / 2f, contentWidth, bottom);
                 canvas.drawRect(rect, paint);
             } else if (isCurrentLastLine && mStyle.drawBorder()) {
-                drawLineWithBottomRound(canvas, paint, x, top, width, bottom, radius);
+                drawLineWithBottomRound(canvas, paint, x, top, contentWidth, bottom, radius);
             } else if (isCurrentLastLine && isHideHeader) {
-                rect.set((int) x, bottom - borderWidth, width, bottom);
+                rect.set((int) x, bottom - borderWidth, contentWidth, bottom);
                 canvas.drawRect(rect, paint);
             }
             isFirstTableRow = first;
@@ -418,6 +437,10 @@ public class TableRowSpan extends ReplacementSpan {
             } finally {
                 canvas.restoreToCount(save);
             }
+        }
+
+        if (scrollSave >= 0) {
+            canvas.restoreToCount(scrollSave);
         }
 
         if (height != maxHeight) {
@@ -609,9 +632,23 @@ public class TableRowSpan extends ReplacementSpan {
         return (int) cellWidth(layouts.size());
     }
 
+    /** 列宽下限：每列最小可视宽度的 1/3（参考千问：列数超过约 3 列时表格超宽横滚） */
+    private static final float MIN_CELL_WIDTH_DIVISOR = 3F;
+
+    // 列宽 = max(等分宽, 可视宽/3)。列数 > 3 时总宽超过可视宽度，配合横向滚动查看全部列。
+    // isHideHeader = 独立展示模式（全屏预览页，外部已按列数提供超宽画布），
+    // 保持等分铺满，由外层横向 RecyclerView 负责滚动。
     // @since 4.6.0
     protected float cellWidth(int size) {
-        return 1F * width / size;
+        if (size <= 0) {
+            return 0;
+        }
+        final float equalWidth = 1F * width / size;
+        if (isHideHeader) {
+            return equalWidth;
+        }
+        final float minCellWidth = width / MIN_CELL_WIDTH_DIVISOR;
+        return Math.max(equalWidth, minCellWidth);
     }
 
     @SuppressLint("SwitchIntDef")
@@ -633,6 +670,53 @@ public class TableRowSpan extends ReplacementSpan {
 
     public void invalidator(@Nullable Invalidator invalidator) {
         this.invalidator = invalidator;
+    }
+
+    public void setTableIndex(int tableIndex) {
+        this.tableIndex = tableIndex;
+    }
+
+    public int getTableIndex() {
+        return tableIndex;
+    }
+
+    /**
+     * 表格可横向滚动的范围：内容总宽 - 可视宽度（<=0 表示当前不可滚）。
+     * 显式传入 viewWidth 计算，不依赖 draw 阶段才更新的内部 width 状态。
+     * isHideHeader = 独立展示模式（全屏预览，外层已有超宽画布+横向 RV），不启用 Span 内横滚。
+     */
+    public int getScrollRange(int viewWidth) {
+        if (isHideHeader) {
+            return 0;
+        }
+        final int size = layouts.size();
+        if (size == 0 || viewWidth <= 0) {
+            return 0;
+        }
+        final float cellW = Math.max(1F * viewWidth / size, viewWidth / MIN_CELL_WIDTH_DIVISOR);
+        return Math.max(0, (int) (cellW * size) - viewWidth);
+    }
+
+    private static final String TABLE_SCROLL_TAG = "TABLE_SCROLL_DBG";
+
+    /**
+     * 从宿主 TextView 读取本表的横向滚动偏移；宿主未实现 IMarkdownLayer 时视为不滚动。
+     */
+    private int obtainTableScrollX(CharSequence text) {
+        if (!(text instanceof Spanned)) {
+            MDLogger.d(TABLE_SCROLL_TAG, "obtainScrollX: text not Spanned");
+            return 0;
+        }
+        if (tableIndex < 0) {
+            MDLogger.d(TABLE_SCROLL_TAG, "obtainScrollX: tableIndex not set");
+            return 0;
+        }
+        final TextView textView = TextViewSpan.textViewOf((Spanned) text);
+        if (textView instanceof IMarkdownLayer) {
+            return ((IMarkdownLayer) textView).getTableScrollX(tableIndex);
+        }
+        MDLogger.d(TABLE_SCROLL_TAG, "obtainScrollX: no IMarkdownLayer host, tv=" + textView);
+        return 0;
     }
 
     private static abstract class CallbackAdapter implements Drawable.Callback {

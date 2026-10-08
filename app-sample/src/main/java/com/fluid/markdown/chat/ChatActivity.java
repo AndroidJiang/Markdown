@@ -135,6 +135,10 @@ public class ChatActivity extends AppCompatActivity {
     }
 
     private String selectResponse(String text) {
+        if (containsAny(text, "表格", "table")) {
+            // 表格展示：含3列常规表格 + 8列/6列超宽表格（表体支持横向滑动）
+            return MockSSESource.buildTableShowcase();
+        }
         if (containsAny(text, "出行", "旅游", "旅行", "行程", "规划")) {
             return MockSSESource.buildTravelPlan();
         }
