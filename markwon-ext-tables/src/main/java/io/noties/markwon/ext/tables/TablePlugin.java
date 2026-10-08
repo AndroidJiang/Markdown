@@ -159,6 +159,7 @@ public class TablePlugin extends AbstractMarkwonPlugin implements StreamOutState
 
         public ConcurrentHashMap<Integer, Integer> mTableRows = new ConcurrentHashMap<>(); // key: table index
         public ConcurrentHashMap<Integer, List<TableRowSpan>> mPendingTableRowSpanList = new ConcurrentHashMap<>(); // key: table index
+        public ConcurrentHashMap<Integer, Integer> mTableColumns = new ConcurrentHashMap<>(); // key: table index, value: 表头列数（流式行完整性判定基准）
 
         private final int tableReducedLineHeight = Utils.dpToPx(2);
 
@@ -196,6 +197,7 @@ public class TablePlugin extends AbstractMarkwonPlugin implements StreamOutState
             mTableIsHeader.clear();
             mTableRows.clear();
             mPendingTableRow.clear();
+            mTableColumns.clear();
         }
 
         void configure(@NonNull MarkwonVisitor.Builder builder) {
@@ -283,6 +285,11 @@ public class TablePlugin extends AbstractMarkwonPlugin implements StreamOutState
                 }
                 if (addNewLine) {
                     visitor.forceNewLine();
+                }
+                // 记录本表表头列数（流式行完整性判定基准，见 findCurrentTableEnd）。
+                // 表头 + 分隔行到齐后才会被解析为表格，表头行必然完整。
+                if (tableRowIsHeader) {
+                    mTableColumns.put(tableIndex, pendingTableRow.size());
                 }
                 boolean useCachedSpan = false;
                 MDLogger.d(TAG, "===== maxIndex is=" + maxContentIndex);
@@ -462,37 +469,25 @@ public class TablePlugin extends AbstractMarkwonPlugin implements StreamOutState
         }
 
         /**
-         * 找到当前originMarkdown的字符串最后一行
+         * 判断当前渲染的表格行是否已在流式文本中完整出现。
+         * <p>
+         * 旧实现拿「全文最后一个表格行」的列数做阈值：多表场景下，前面表格的列数
+         * 一旦超过全文最后一张表的列数（如 8 列表在 6 列表之前），会被误判为
+         * 「行未流式完整」而跳过 span 创建，整张表格渲染为空白。
+         * 正确语义：流式逐字时只有末尾正在增长的行可能 cell 不足——
+         * 记录每张表自己的表头列数，本行 cell 数凑齐表头列数即视为完整。
          */
         private boolean findCurrentTableEnd(int tableIndex) {
-            try {
-                List<TableRowSpan.Cell> pendingTableRow = mPendingTableRow.get(tableIndex);
-                if (pendingTableRow == null || pendingTableRow.isEmpty()) {
-                    return false;
-                }
-
-                final int lastIndex = originMarkdown.lastIndexOf("|\n|");
-                if (lastIndex == -1) {
-                    return false;
-                }
-
-                String lastColumn = originMarkdown.substring(lastIndex + 3);
-                if (TextUtils.isEmpty(lastColumn)) {
-                    return false;
-                }
-
-                final int lastSeparatorIndex = lastColumn.lastIndexOf("|");
-                if (lastSeparatorIndex == -1) {
-                    return false;
-                }
-
-                String columnContent = lastColumn.substring(0, lastSeparatorIndex);
-                String[] columns = columnContent.split("\\|");
-                return pendingTableRow.size() <= columns.length;
-            } catch (Throwable e) {
-                MDLogger.e(TAG, "findCurrentTableEnd..e:", e);
+            List<TableRowSpan.Cell> pendingTableRow = mPendingTableRow.get(tableIndex);
+            if (pendingTableRow == null || pendingTableRow.isEmpty()) {
+                return false;
             }
-            return false;
+            Integer columns = mTableColumns.get(tableIndex);
+            if (columns == null || columns <= 0) {
+                // 表头行自身（列数尚未记录）：表头+分隔行到齐才成表，视为完整
+                return true;
+            }
+            return pendingTableRow.size() >= columns;
         }
 
         private TableRowSpan getCachedSpan(int tableIndex, int length) {

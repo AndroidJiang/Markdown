@@ -257,6 +257,15 @@ public class TableRowSpan extends ReplacementSpan {
         }
         x = 0;
 
+        // 诊断（仅在异常状态时打，验证 8 列空白问题）：
+        // layouts 为空或可视宽异常时，背景/边框/文本均不可画，表现为“占位空白”
+        if (layouts.size() == 0 || width <= 0) {
+            MDLogger.d(TABLE_SCROLL_TAG, "ABNORMAL: table=" + tableIndex
+                    + ", size=" + layouts.size()
+                    + ", width=" + width
+                    + ", header=" + header);
+        }
+
         int maxHeight = 0;
 
         final int padding = mStyle.cellTopBottomPadding();
@@ -410,11 +419,13 @@ public class TableRowSpan extends ReplacementSpan {
                     }
 
                     if (i == (size - 1)) {
-                        // @since 4.6.0 subtract rounding offset for the last vertical divider
+                        // 末列右边线画在本列右缘（w 处）。
+                        // 原公式 w - roundingDiff 基于等分布局（roundingDiff 为舍入修正，恒≈0）；
+                        // 列宽含下限后该值恒为负，会把边线错误画到画布左侧之外。
                         rect.set(
                                 w - borderWidth,
                                 borderTop,
-                                w - roundingDiff,
+                                w,
                                 isCurrentLastLine ? borderBottom - radius + borderWidth : borderBottom
                         );
                         if (header && isHideHeader && mStyle.drawBorder() && radius > 0) {
