@@ -20,9 +20,12 @@ import android.text.style.ForegroundColorSpan;
 import android.util.AttributeSet;
 import android.util.SparseArray;
 import android.view.MotionEvent;
+import android.view.VelocityTracker;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewParent;
+import android.view.animation.DecelerateInterpolator;
+import android.widget.OverScroller;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.widget.AppCompatTextView;
@@ -99,6 +102,13 @@ public class PrinterMarkDownTextView extends AppCompatTextView implements IMarkd
     private int mTableScrollStartX;
     private int mTouchSlop;
 
+    // ===== 表格横向惯性（fling，效果接近横向滚动列表） =====
+    private VelocityTracker mFlingVelocityTracker;
+    private OverScroller mTableFlingScroller;
+    private boolean mTableFlinging = false;
+    private int mFlingTableIndex = -1;
+    private int mFlingRange = 0;
+
     public PrinterMarkDownTextView(Context context) {
         this(context, null);
     }
@@ -125,6 +135,7 @@ public class PrinterMarkDownTextView extends AppCompatTextView implements IMarkd
         addTextChangedListener(this);
         setOnLongClickListener(v -> true);
         mTouchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
+        mTableFlingScroller = new OverScroller(context, new DecelerateInterpolator());
     }
 
     public void init(@NonNull MarkdownStyles styles, ElementClickEventCallback callback) {
@@ -557,6 +568,14 @@ public class PrinterMarkDownTextView extends AppCompatTextView implements IMarkd
     private boolean handleTableHorizontalScroll(MotionEvent event) {
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN: {
+                // 新触摸打断进行中的惯性滑动
+                stopTableFling();
+                if (mFlingVelocityTracker == null) {
+                    mFlingVelocityTracker = VelocityTracker.obtain();
+                } else {
+                    mFlingVelocityTracker.clear();
+                }
+                mFlingVelocityTracker.addMovement(event);
                 mTableHorizontalScrolling = false;
                 mDownRawX = event.getX();
                 mDownRawY = event.getY();
@@ -581,6 +600,9 @@ public class PrinterMarkDownTextView extends AppCompatTextView implements IMarkd
                 return true;
             }
             case MotionEvent.ACTION_MOVE: {
+                if (mFlingVelocityTracker != null) {
+                    mFlingVelocityTracker.addMovement(event);
+                }
                 if (mTableHorizontalScrolling && mActiveTableSpan != null) {
                     applyTableScroll(event);
                     return true;
@@ -635,9 +657,15 @@ public class PrinterMarkDownTextView extends AppCompatTextView implements IMarkd
             case MotionEvent.ACTION_UP: {
                 final boolean wasScrolling = mTableHorizontalScrolling;
                 final boolean downOnTable = mDownOnScrollableTable;
+                final TableRowSpan upSpan = mActiveTableSpan;
                 resetTableScrollGesture();
                 if (!downOnTable) {
                     return false;
+                }
+                if (wasScrolling) {
+                    // 抬手后按抬起速度继续惯性滑动（不够快则自然停在当前偏移）
+                    startTableFling(upSpan, event);
+                    return true; // 滚动结束，消费，避免误触链接/按钮
                 }
                 if (wasScrolling) {
                     return true; // 滚动结束，消费，避免误触链接/按钮
@@ -702,6 +730,77 @@ public class PrinterMarkDownTextView extends AppCompatTextView implements IMarkd
         mTableHorizontalScrolling = false;
         mActiveTableSpan = null;
         releaseTableParentIntercept();
+    }
+
+    /**
+     * 抬手惯性滑动：沿用抬起时的横向速度让表格继续滚动，效果接近横向滚动列表的 fling。
+     * 用 OverScroller 计算减速轨迹，postOnAnimation 逐帧驱动；每帧重设同一文本对象，
+     * 走与打字机一致的全量重绘链路（ROM 优化问题见 applyTableScroll 注释）。
+     * 速度方向：手指向左甩（velocityX<0）内容向左移、scrollX 增大，故取反传入 fling。
+     */
+    private void startTableFling(TableRowSpan span, MotionEvent event) {
+        if (span == null || mFlingVelocityTracker == null) {
+            return;
+        }
+        mFlingVelocityTracker.addMovement(event);
+        mFlingVelocityTracker.computeCurrentVelocity(1000);
+        final float vx = mFlingVelocityTracker.getXVelocity();
+        final int range = span.getScrollRange(getTableContentWidth());
+        final int startX = getTableScrollX(span.getTableIndex());
+        if (range <= 0) {
+            return;
+        }
+        final int minFlingVelocity = ViewConfiguration.get(getContext()).getScaledMinimumFlingVelocity();
+        if (Math.abs(vx) < minFlingVelocity) {
+            return;
+        }
+        mFlingTableIndex = span.getTableIndex();
+        mFlingRange = range;
+        mTableFlingScroller.fling(startX, 0, Math.round(-vx), 0, 0, range, 0, 0);
+        mTableFlinging = true;
+        MDLogger.d(TABLE_SCROLL_TAG, "fling start vx=" + vx + " startX=" + startX + " range=" + range);
+        postOnAnimation(this::runTableFling);
+    }
+
+    private void runTableFling() {
+        if (!mTableFlinging || mFlingTableIndex < 0) {
+            return;
+        }
+        if (!mTableFlingScroller.computeScrollOffset()) {
+            stopTableFling();
+            return;
+        }
+        final int x = mTableFlingScroller.getCurrX();
+        if (x != getTableScrollX(mFlingTableIndex)) {
+            setTableScrollX(mFlingTableIndex, x);
+            postInvalidateOnAnimation();
+            final CharSequence text = getText();
+            if (text instanceof SpannableStringBuilder) {
+                setTextSafely((SpannableStringBuilder) text);
+            }
+            MDLogger.d(TABLE_SCROLL_TAG, "fling scrollX=" + x + "/" + mFlingRange);
+        }
+        postOnAnimation(this::runTableFling);
+    }
+
+    /** 停止惯性滑动：自然结束、新触摸 DOWN、视图销毁时调用 */
+    private void stopTableFling() {
+        if (!mTableFlinging) {
+            return;
+        }
+        mTableFlinging = false;
+        mTableFlingScroller.forceFinished(true);
+        mFlingTableIndex = -1;
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
+        stopTableFling();
+        if (mFlingVelocityTracker != null) {
+            mFlingVelocityTracker.recycle();
+            mFlingVelocityTracker = null;
+        }
     }
 
     /** 表格可用内容宽度（与 TableRowSpan getSize/layout 基准一致） */
